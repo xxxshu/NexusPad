@@ -120,4 +120,5 @@ jobs:
         with:
           files: |
             src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/aarch64-unknown-linux-gnu/release/remote-touchpad
           fail_on_unmatched_files: false
