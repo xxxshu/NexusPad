@@ -15,7 +15,7 @@ pub enum ClientMsg {
     #[serde(rename = "mu")]
     MouseUp { #[serde(default = "default_button")] b: u8 },
     #[serde(rename = "scr")]
-    Scroll { y: i32 },
+    Scroll { y: f64 },
     #[serde(rename = "type")]
     TypeText { t: String },
     #[serde(rename = "key")]
@@ -24,6 +24,8 @@ pub enum ClientMsg {
     Backspace { #[serde(default = "default_one")] n: u32 },
     #[serde(rename = "approval_resp")]
     ApprovalResp { r: String },
+    #[serde(rename = "auth")]
+    Auth { pin: String },
 }
 
 fn default_button() -> u8 { 1 }
@@ -38,6 +40,9 @@ pub enum ServerMsg {
     #[serde(rename = "wait")]
     Wait { #[serde(skip_serializing_if = "Option::is_none")] reason: Option<String> },
     #[serde(rename = "approval_req")]
-    #[allow(dead_code)]
     ApprovalReq { ip: String },
+    #[serde(rename = "auth_required")]
+    AuthRequired,
+    #[serde(rename = "auth_fail")]
+    AuthFail,
 }

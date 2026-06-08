@@ -26,6 +26,8 @@ pub struct ServerStatus {
     pub url: String,
     pub qr_svg: String,
     pub events: Vec<String>,
+    pub device_name: Option<String>,
+    pub pin: Option<String>,
 }
 
 // ─── Tauri Commands ────────────────────────────────────────
@@ -37,6 +39,18 @@ async fn get_status(state: State<'_, Mutex<AppState>>) -> Result<ServerStatus, S
     let url = format!("http://{}:{}", ip, app.port);
     let qr_svg = server::generate_qr_svg(&url);
 
+    let device_name = if let Some(ref ss) = app.server_state {
+        ss.connected_device.lock().await.clone()
+    } else {
+        None
+    };
+
+    let pin = if let Some(ref ss) = app.server_state {
+        Some(ss.pin.lock().await.clone())
+    } else {
+        None
+    };
+
     Ok(ServerStatus {
         running: app.running,
         ip,
@@ -44,6 +58,8 @@ async fn get_status(state: State<'_, Mutex<AppState>>) -> Result<ServerStatus, S
         url,
         qr_svg,
         events: Vec::new(),
+        device_name,
+        pin,
     })
 }
 
@@ -56,16 +72,6 @@ async fn start_server_cmd(
     let mut app = state.lock().await;
     if app.running {
         return Err("Server already running".into());
-    }
-
-    // Check xdotool
-    if !std::process::Command::new("which")
-        .arg("xdotool")
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        return Err("xdotool not found. Install: apt install xdotool".into());
     }
 
     let input_sim = input::InputSimulator::new().await
@@ -117,6 +123,7 @@ async fn start_server_cmd(
     let ip = server::get_local_ip();
     let url = format!("http://{}:{}", ip, port);
     let qr_svg = server::generate_qr_svg(&url);
+    let pin = server_state.pin.lock().await.clone();
 
     app.server_state = Some(server_state);
     app.stop_tx = Some(stop_tx);
@@ -130,6 +137,8 @@ async fn start_server_cmd(
         url,
         qr_svg,
         events: Vec::new(),
+        device_name: None,
+        pin: Some(pin),
     })
 }
 
@@ -138,6 +147,17 @@ async fn stop_server_cmd(state: State<'_, Mutex<AppState>>) -> Result<(), String
     let mut app = state.lock().await;
     if !app.running {
         return Err("Server not running".into());
+    }
+
+    // Close active WebSocket connection first
+    if let Some(ref ss) = app.server_state {
+        if let Some((_, tx)) = ss.active_ws.lock().await.take() {
+            let _ = tx.send(axum::extract::ws::Message::Close(Some(axum::extract::ws::CloseFrame {
+                code: 1000,
+                reason: "server stopped".into(),
+            })));
+        }
+        *ss.connected_device.lock().await = None;
     }
 
     if let Some(tx) = app.stop_tx.take() {

@@ -5,12 +5,13 @@ use std::sync::Arc;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::ConnectInfo;
 use axum::extract::State as AxumState;
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, Mutex, oneshot};
+use tokio::sync::{broadcast, mpsc, Mutex, oneshot};
 use serde_json;
 use anyhow::Result;
 use tracing::{info, warn};
@@ -21,11 +22,25 @@ use crate::protocol::{ClientMsg, ServerMsg};
 /// Shared server state
 pub struct ServerState {
     pub input: Arc<Mutex<InputSimulator>>,
-    pub active_ws: Arc<Mutex<Option<SocketAddr>>>,
+    /// Active controller: (addr, sender_to_ws)
+    pub active_ws: Arc<Mutex<Option<(SocketAddr, mpsc::UnboundedSender<Message>)>>>,
+    /// Connected device name (from User-Agent)
+    pub connected_device: Arc<Mutex<Option<String>>>,
+    /// Pending controller waiting for approval
     pub pending_ws: Arc<Mutex<Option<SocketAddr>>>,
+    /// Channel to send approval response from active → pending handler
     pub approval_tx: Arc<Mutex<Option<oneshot::Sender<String>>>>,
+    /// PIN code for authentication (wrapped in Mutex for interior mutability)
+    pub pin: Mutex<String>,
     pub event_tx: broadcast::Sender<String>,
     pub frontend_dir: PathBuf,
+}
+
+/// Generate a random 6-digit PIN
+fn generate_pin() -> String {
+    use rand::Rng;
+    let pin = rand::rng().random_range(100000u32..=999999);
+    format!("{}", pin)
 }
 
 impl ServerState {
@@ -34,8 +49,10 @@ impl ServerState {
         Self {
             input: Arc::new(Mutex::new(input)),
             active_ws: Arc::new(Mutex::new(None)),
+            connected_device: Arc::new(Mutex::new(None)),
             pending_ws: Arc::new(Mutex::new(None)),
             approval_tx: Arc::new(Mutex::new(None)),
+            pin: Mutex::new(generate_pin()),
             event_tx,
             frontend_dir,
         }
@@ -44,17 +61,47 @@ impl ServerState {
     fn send_event(&self, msg: String) {
         let _ = self.event_tx.send(msg);
     }
+
+    /// Send a message to the active controller's WebSocket
+    async fn send_to_active(&self, msg: &str) -> bool {
+        let active = self.active_ws.lock().await;
+        if let Some((_, ref tx)) = *active {
+            tx.send(Message::Text(msg.into())).is_ok()
+        } else {
+            false
+        }
+    }
 }
 
-/// Get LAN IP address
+/// Get LAN IP address (prefer WiFi/Ethernet over virtual adapters)
 pub fn get_local_ip() -> String {
+    if let Ok(addrs) = local_ip_address::list_afinet_netifas() {
+        let mut best = None;
+        for (_name, ip) in &addrs {
+            if let std::net::IpAddr::V4(v4) = ip {
+                let s = v4.to_string();
+                if s.starts_with("127.") || s.starts_with("169.254.") {
+                    continue;
+                }
+                if s.starts_with("192.168.") || s.starts_with("10.") {
+                    return s;
+                }
+                if best.is_none() {
+                    best = Some(s);
+                }
+            }
+        }
+        if let Some(ip) = best {
+            return ip;
+        }
+    }
     if let Ok(ip) = local_ip_address::local_ip() {
         return ip.to_string();
     }
     "127.0.0.1".to_string()
 }
 
-/// Generate QR code as text (for terminal) or SVG (for GUI)
+/// Generate QR code as SVG
 pub fn generate_qr_svg(url: &str) -> String {
     use qrcode::QrCode;
     use qrcode::render::svg;
@@ -73,25 +120,64 @@ pub async fn start_server(
 ) -> Result<()> {
     let frontend = state.frontend_dir.clone();
 
-    // Build HTTP response for the frontend page
-    let index_html = std::fs::read_to_string(frontend.join("index.html"))
-        .unwrap_or_else(|_| "<h1>Frontend not found</h1>".to_string());
-
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .route("/", get(move || {
-            let html = index_html.clone();
+        .fallback(move |req: axum::http::Request<axum::body::Body>| {
+            let frontend = frontend.clone();
             async move {
-                axum::response::Html(html)
+                let path = req.uri().path().trim_start_matches('/');
+                let path = if path.is_empty() { "index.html" } else { path };
+                let file_path = frontend.join(path);
+
+                // Path traversal protection: ensure resolved path is under frontend_dir
+                let file_path = match file_path.canonicalize() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return axum::response::Response::builder()
+                            .status(404)
+                            .body(axum::body::Body::from("Not found"))
+                            .unwrap();
+                    }
+                };
+                if !file_path.starts_with(frontend.canonicalize().as_deref().unwrap_or(&frontend)) {
+                    return axum::response::Response::builder()
+                        .status(403)
+                        .body(axum::body::Body::from("Forbidden"))
+                        .unwrap();
+                }
+
+                match tokio::fs::read(&file_path).await {
+                    Ok(data) => {
+                        let mime = match file_path.extension().and_then(|e| e.to_str()) {
+                            Some("html") => "text/html; charset=utf-8",
+                            Some("css") => "text/css; charset=utf-8",
+                            Some("js") => "application/javascript; charset=utf-8",
+                            Some("png") => "image/png",
+                            Some("svg") => "image/svg+xml",
+                            Some("json") => "application/json",
+                            Some("ttf") => "font/ttf",
+                            Some("woff") => "font/woff",
+                            Some("woff2") => "font/woff2",
+                            _ => "application/octet-stream",
+                        };
+                        axum::response::Response::builder()
+                            .header("content-type", mime)
+                            .body(axum::body::Body::from(data))
+                            .unwrap()
+                    }
+                    Err(_) => axum::response::Response::builder()
+                        .status(404)
+                        .body(axum::body::Body::from("Not found"))
+                        .unwrap(),
+                }
             }
-        }))
+        })
         .with_state(state.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     info!("Server listening on {}", addr);
 
-    // Serve with graceful shutdown
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
             let _ = stop_rx.recv().await;
@@ -106,108 +192,187 @@ pub async fn start_server(
 async fn ws_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     AxumState(state): AxumState<Arc<ServerState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state, addr))
+    let device_name = parse_device_name(&headers);
+    ws.on_upgrade(move |socket| handle_ws(socket, state, addr, device_name))
+}
+
+/// Extract a friendly device name from User-Agent
+fn parse_device_name(headers: &HeaderMap) -> String {
+    let ua = headers.get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("Unknown Device");
+
+    if ua.contains("iPhone") { "iPhone".to_string() }
+    else if ua.contains("iPad") { "iPad".to_string() }
+    else if ua.contains("Android") { "Android".to_string() }
+    else if ua.contains("Windows") { "Windows".to_string() }
+    else if ua.contains("Macintosh") || ua.contains("Mac OS") { "Mac".to_string() }
+    else if ua.contains("Linux") { "Linux".to_string() }
+    else { "设备".to_string() }
 }
 
 /// Handle a single WebSocket connection
-async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr) {
+async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr, device_name: String) {
     let addr_str = format!("{}", addr);
-    info!("Client connected: {}", addr_str);
+    info!("Client connected: {} ({})", addr_str, device_name);
+
+    // Split socket into sink (for sending) and stream (for receiving)
+    let (mut ws_sink, mut ws_stream) = socket.split();
+
+    // Create an unbounded channel for sending messages to this WebSocket
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+
+    // Task: forward channel messages → WebSocket
+    let forward_task = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if ws_sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Step 1: Require PIN authentication
+    let auth_msg = serde_json::to_string(&ServerMsg::AuthRequired).unwrap();
+    let _ = tx.send(Message::Text(auth_msg.into()));
+
+    let authenticated = loop {
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(60),
+            ws_stream.next(),
+        ).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let text_str: &str = text.as_ref();
+                if let Ok(ClientMsg::Auth { pin }) = serde_json::from_str(text_str) {
+                    let current_pin = state.pin.lock().await.clone();
+                    if pin == current_pin {
+                        info!("{} authenticated", addr_str);
+                        // Refresh PIN for next device
+                        *state.pin.lock().await = generate_pin();
+                        break true;
+                    } else {
+                        warn!("{} auth failed (wrong PIN)", addr_str);
+                        let fail = serde_json::to_string(&ServerMsg::AuthFail).unwrap();
+                        let _ = tx.send(Message::Text(fail.into()));
+                    }
+                }
+            }
+            _ => break false,
+        }
+    };
+
+    if !authenticated {
+        let _ = tx.send(Message::Close(Some(axum::extract::ws::CloseFrame {
+            code: 4003,
+            reason: "auth failed".into(),
+        })));
+        forward_task.abort();
+        return;
+    }
 
     // Check if there's already an active controller
     let has_active = state.active_ws.lock().await.is_some();
 
     if !has_active {
         // No active controller → take control immediately
-        *state.active_ws.lock().await = Some(addr);
+        *state.active_ws.lock().await = Some((addr, tx.clone()));
+        *state.connected_device.lock().await = Some(device_name.clone());
         let msg = serde_json::to_string(&ServerMsg::CtrlOk).unwrap();
-        let _ = socket.send(Message::Text(msg.into())).await;
-        state.send_event(format!("✅ {} 已连接", addr_str));
+        let _ = tx.send(Message::Text(msg.into()));
+        state.send_event(format!("✅ {} ({}) 已连接", device_name, addr_str));
         info!("{} is now controller", addr_str);
     } else {
         // Active controller exists → need approval
         let has_pending = state.pending_ws.lock().await.is_some();
         if has_pending {
-            // Already someone waiting → reject
             let msg = serde_json::to_string(&ServerMsg::Wait {
                 reason: Some("busy".into())
             }).unwrap();
-            let _ = socket.send(Message::Text(msg.into())).await;
-            let _ = socket.send(Message::Close(Some(axum::extract::ws::CloseFrame {
+            let _ = tx.send(Message::Text(msg.into()));
+            let _ = tx.send(Message::Close(Some(axum::extract::ws::CloseFrame {
                 code: 4002,
                 reason: "busy".into(),
-            }))).await;
+            })));
+            forward_task.abort();
             return;
         }
 
-        // Set as pending
         *state.pending_ws.lock().await = Some(addr);
 
-        // Create approval channel
-        let (tx, rx) = oneshot::channel::<String>();
-        *state.approval_tx.lock().await = Some(tx);
+        let (approval_tx, approval_rx) = oneshot::channel::<String>();
+        *state.approval_tx.lock().await = Some(approval_tx);
 
-        // Notify active controller
-        if let Some(_active_addr) = *state.active_ws.lock().await {
-            // We need to send via broadcast to the active controller
-            // For simplicity, we'll use the event system
-            state.send_event(format!("approval_req:{}", addr_str));
-        }
+        // Send approval request DIRECTLY to the active controller's WebSocket
+        let req_msg = serde_json::json!({"a": "approval_req", "ip": addr_str}).to_string();
+        state.send_to_active(&req_msg).await;
 
         // Notify new client they're waiting
         let msg = serde_json::to_string(&ServerMsg::Wait { reason: None }).unwrap();
-        let _ = socket.send(Message::Text(msg.into())).await;
+        let _ = tx.send(Message::Text(msg.into()));
         state.send_event(format!("⏳ {} 等待审批", addr_str));
 
         // Wait for approval with timeout
         let result = tokio::time::timeout(
             tokio::time::Duration::from_secs(30),
-            rx,
+            approval_rx,
         ).await;
 
         match result {
             Ok(Ok(response)) if response == "accept" => {
-                // Disconnect old controller (via broadcast)
-                state.send_event("kick_active:4001".to_string());
+                // Kick old controller
+                let kick = serde_json::json!({"a": "wait", "reason": "kicked"}).to_string();
+                state.send_to_active(&kick).await;
+                // Close old controller's WebSocket
+                if let Some((_, old_tx)) = state.active_ws.lock().await.take() {
+                    let _ = old_tx.send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                        code: 4001,
+                        reason: "new controller".into(),
+                    })));
+                }
 
                 // Promote pending to active
-                *state.active_ws.lock().await = Some(addr);
+                *state.active_ws.lock().await = Some((addr, tx.clone()));
+                *state.connected_device.lock().await = Some(device_name.clone());
                 *state.pending_ws.lock().await = None;
                 *state.approval_tx.lock().await = None;
 
                 let msg = serde_json::to_string(&ServerMsg::CtrlOk).unwrap();
-                let _ = socket.send(Message::Text(msg.into())).await;
-                state.send_event(format!("✅ {} 已接管控制", addr_str));
+                let _ = tx.send(Message::Text(msg.into()));
+                state.send_event(format!("✅ {} ({}) 已接管控制", device_name, addr_str));
                 info!("{} approved, now controller", addr_str);
             }
             _ => {
-                // Timeout or reject
                 let reason = match result {
-                    Ok(Ok(r)) => r, // "reject"
+                    Ok(Ok(r)) if r == "reject" => "rejected".to_string(),
+                    Ok(Ok(r)) => r,
                     _ => "timeout".to_string(),
                 };
+                // Send rejection message while socket is still open
                 let msg = serde_json::to_string(&ServerMsg::Wait {
                     reason: Some(reason.clone())
                 }).unwrap();
-                let _ = socket.send(Message::Text(msg.into())).await;
-                let _ = socket.send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                let _ = tx.send(Message::Text(msg.into()));
+                // Give frontend time to process the message before closing
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let _ = tx.send(Message::Close(Some(axum::extract::ws::CloseFrame {
                     code: 4002,
                     reason: reason.clone().into(),
-                }))).await;
+                })));
 
                 *state.pending_ws.lock().await = None;
                 *state.approval_tx.lock().await = None;
                 state.send_event(format!("🚫 {} {}", addr_str,
                     if reason == "timeout" { "等待超时" } else { "被拒绝" }));
+                forward_task.abort();
                 return;
             }
         }
     }
 
     // Message loop for the active controller
-    while let Some(Ok(msg)) = socket.next().await {
+    while let Some(Ok(msg)) = ws_stream.next().await {
         match msg {
             Message::Text(text) => {
                 let text_str: &str = text.as_ref();
@@ -220,37 +385,36 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>, addr: SocketA
                     }
                 }
             }
-            Message::Close(_) => {
-                break;
-            }
+            Message::Close(_) => break,
             _ => {}
         }
     }
 
     // Cleanup on disconnect
     let mut active = state.active_ws.lock().await;
-    if *active == Some(addr) {
+    if active.as_ref().map(|(a, _)| *a) == Some(addr) {
         *active = None;
+        *state.connected_device.lock().await = None;
     }
     drop(active);
 
     let mut pending = state.pending_ws.lock().await;
     if *pending == Some(addr) {
         *pending = None;
-        // Resolve pending approval as timeout
         let mut tx_lock = state.approval_tx.lock().await;
-        if let Some(tx) = tx_lock.take() {
-            let _ = tx.send("timeout".to_string());
+        if let Some(approval_sender) = tx_lock.take() {
+            let _ = approval_sender.send("timeout".to_string());
         }
     }
 
     state.send_event(format!("❌ {} 已断开", addr_str));
     info!("Client disconnected: {}", addr_str);
+    forward_task.abort();
 }
 
 /// Handle a parsed client message
 async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str) {
-    let mut input = state.input.lock().await;
+    let input = state.input.lock().await;
 
     let result = match msg {
         ClientMsg::Move { x, y } => input.mouse_move(x, y).await,
@@ -262,16 +426,25 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
         ClientMsg::TypeText { t } => input.type_text(&t).await,
         ClientMsg::Key { k } => input.send_key(&k).await,
         ClientMsg::Backspace { n } => {
-            input.send_key(&format!("--repeat {} BackSpace", n)).await
+            for _ in 0..n {
+                if let Err(e) = input.send_key("Backspace").await {
+                    warn!("Backspace error: {}", e);
+                    break;
+                }
+            }
+            return;
         }
         ClientMsg::ApprovalResp { r } => {
-            // Forward approval response
             drop(input);
             let mut tx_lock = state.approval_tx.lock().await;
             if let Some(tx) = tx_lock.take() {
                 let _ = tx.send(r.clone());
                 info!("Approval response: {}", r);
             }
+            return;
+        }
+        ClientMsg::Auth { .. } => {
+            // Auth handled in connection setup, ignore here
             return;
         }
     };

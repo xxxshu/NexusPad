@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.remote-touchpad.app",
   "build": {
-    "frontendDist": "./ui",
-    "devUrl": "http://localhost:1420"
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "./ui"
   },
   "app": {
     "windows": [
@@ -13,7 +13,8 @@
         "title": "Remote Touchpad",
         "width": 400,
         "height": 550,
-        "resizable": false
+        "resizable": false,
+        "decorations": false
       }
     ],
     "security": {
@@ -21,6 +22,6 @@
     }
   },
   "bundle": {
-    "icon": ["icons/icon.png"]
+    "icon": ["icons/icon.ico", "icons/icon.png"]
   }
 }

@@ -1,42 +1,72 @@
-// ─── Connection ──────────────────────────────────────────
+// ─── Connection ──────────────────────────────────────
 const $ = id => document.getElementById(id);
 let ws, reconn, hasControl = false, hasEverControlled = false;
 const st = $('status');
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => { st.textContent = '✅ 已连接'; st.className = 'ok'; clearTimeout(reconn) };
+  ws.onopen = () => { st.textContent = '已连接'; st.className = 'ok'; clearTimeout(reconn) };
   ws.onclose = e => {
     hasControl = false;
     $('approval-overlay').classList.remove('show');
-    if (e.code === 4001) { st.textContent = '🔄 已被新设备接管'; st.className = 'err'; return; }
-    if (e.code === 4002) { return; }
-    if (e.code !== 1000 && e.code !== 1001) {
-      st.textContent = '❌ 已断开'; st.className = 'err';
-      if (hasEverControlled) reconn = setTimeout(connect, 2000);
+    $('auth-overlay').classList.remove('show');
+    if (e.code === 4001) { st.textContent = '已被新设备接管'; st.className = 'err'; return; }
+    if (e.code === 4002) {
+      const reason = e.reason || '';
+      if (reason === 'rejected') { st.textContent = '被拒绝'; st.className = 'err'; }
+      else if (reason === 'timeout') { st.textContent = '等待超时'; st.className = 'err'; }
+      else if (reason === 'busy') { st.textContent = '已有设备在等待'; st.className = 'err'; }
+      return;
     }
+    if (e.code === 1000) { st.textContent = '服务已停止'; st.className = 'err'; return; }
+    st.textContent = '已断开'; st.className = 'err';
+    if (hasEverControlled) reconn = setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();
   ws.onmessage = e => {
     let d; try { d = JSON.parse(e.data) } catch { return };
     if (d.a === 'ctrl_ok') {
       hasControl = true; hasEverControlled = true;
-      st.textContent = '✅ 已连接（控制中）'; st.className = 'ok';
+      st.textContent = '控制中'; st.className = 'ok';
+      $('auth-overlay').classList.remove('show');
+    } else if (d.a === 'auth_required') {
+      $('auth-overlay').classList.add('show');
+      $('auth-pin').value = '';
+      $('auth-error').textContent = '';
+      setTimeout(() => $('auth-pin').focus(), 100);
+    } else if (d.a === 'auth_fail') {
+      $('auth-error').textContent = '配对码错误，请重试';
+      $('auth-pin').value = '';
+      $('auth-pin').focus();
     } else if (d.a === 'wait') {
       hasControl = false;
-      if (d.reason === 'timeout') { st.textContent = '⏰ 等待超时'; st.className = 'err'; }
-      else if (d.reason === 'rejected') { st.textContent = '🚫 被拒绝'; st.className = 'err'; }
-      else if (d.reason === 'busy') { st.textContent = '⏳ 已有其他设备在等待'; st.className = 'err'; }
-      else { st.textContent = '⏳ 等待当前设备同意...'; st.className = 'ok'; }
+      if ($('auth-overlay').classList.contains('show')) {
+        const modal = $('auth-modal');
+        if (d.reason === 'rejected') {
+          modal.innerHTML = '<h3>连接被拒绝</h3><p>当前设备拒绝了你的控制请求</p>' +
+            '<button onclick="location.reload()" class="auth-result-btn dismiss">返回</button>';
+        } else if (d.reason === 'timeout') {
+          modal.innerHTML = '<h3>等待超时</h3><p>当前设备未响应</p>' +
+            '<button onclick="location.reload()" class="auth-result-btn dismiss">返回</button>';
+        } else if (d.reason === 'busy') {
+          modal.innerHTML = '<h3>已有设备在等待</h3><p>请稍后再试</p>' +
+            '<button onclick="location.reload()" class="auth-result-btn dismiss">返回</button>';
+        }
+        return;
+      }
+      if (d.reason === 'timeout') { st.textContent = '等待超时'; st.className = 'err'; }
+      else if (d.reason === 'rejected') { st.textContent = '被拒绝'; st.className = 'err'; }
+      else if (d.reason === 'busy') { st.textContent = '已有设备在等待'; st.className = 'err'; }
+      else { st.textContent = '等待同意...'; st.className = 'ok'; }
     } else if (d.a === 'approval_req') {
-      $('approval-info').textContent = `${d.ip} 正在尝试接管控制权`;
+      $('approval-info').textContent = d.ip + ' 正在尝试接管';
       $('approval-overlay').classList.add('show');
     }
   };
 }
 
 function S(d) {
-  if (!hasControl && d.a !== 'approval_resp') return;
+  if (!hasControl && d.a !== 'approval_resp' && d.a !== 'auth') return;
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(d));
 }
 
@@ -45,95 +75,165 @@ function approvalResp(r) {
   $('approval-overlay').classList.remove('show');
 }
 
-// ─── Sent indicator ─────────────────────────────────────
+function submitAuth() {
+  const pin = $('auth-pin').value.trim();
+  if (pin.length < 4) { $('auth-error').textContent = '请输入配对码'; return; }
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ a: 'auth', pin }));
+}
+
+$('auth-pin').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); submitAuth(); }
+});
+
+// ─── Sent indicator ──────────────────────────────────
 let sentTimer;
 function flash() {
   const el = $('sent'); el.classList.add('show');
-  clearTimeout(sentTimer); sentTimer = setTimeout(() => el.classList.remove('show'), 600);
+  clearTimeout(sentTimer); sentTimer = setTimeout(() => el.classList.remove('show'), 400);
 }
 
-// ─── Keyboard toggle ────────────────────────────────────
+// ─── Keyboard toggle ─────────────────────────────────
 const txt = $('txt');
 const kbBtn = $('kb-btn');
-let kbVisible = false;
+const kbIcon = $('kb-icon');
+let userDismiss = false;
+let skipNextInput = false;
+
+kbBtn.addEventListener('touchstart', () => {
+  userDismiss = true;
+  setTimeout(() => { userDismiss = false; }, 300);
+}, { passive: true });
 
 function toggleKb() {
-  if (kbVisible) { txt.blur(); kbVisible = false; kbBtn.classList.remove('active'); }
-  else { txt.focus(); kbVisible = true; kbBtn.classList.add('active'); }
+  if (kbBtn.classList.contains('active')) {
+    kbBtn.classList.remove('active');
+    kbIcon.querySelector('use').setAttribute('xlink:href', '#icon-danchujianpan');
+    txt.blur();
+  } else {
+    kbBtn.classList.add('active');
+    kbIcon.querySelector('use').setAttribute('xlink:href', '#icon-shouqijianpan');
+    txt.value = '';
+    lastVal = '';
+    txt.focus({ preventScroll: true });
+  }
 }
 
 txt.addEventListener('blur', () => {
   clearTimeout(debounce);
-  if (compositionActive) { txt.value = lastVal; compositionActive = false; }
-  else {
-    const v = txt.value, newText = v.slice(lastVal.length);
-    if (newText) { S({ a: 'type', t: newText }); flash(); }
-    lastVal = v;
+  flushPendingText();
+  if (!userDismiss) {
+    kbBtn.classList.remove('active');
+    kbIcon.querySelector('use').setAttribute('xlink:href', '#icon-danchujianpan');
   }
-  kbVisible = false; kbBtn.classList.remove('active');
 });
 
-// ─── Real-time input ────────────────────────────────────
+function flushPendingText() {
+  if (compositionActive) { compositionActive = false; return; }
+  const v = txt.value;
+  if (v.length > lastVal.length && v.startsWith(lastVal)) {
+    S({ a: 'type', t: v.slice(lastVal.length) }); flash();
+  } else if (v.length < lastVal.length && lastVal.startsWith(v)) {
+    S({ a: 'bs', n: lastVal.length - v.length }); flash();
+  } else if (v !== lastVal) {
+    S({ a: 'bs', n: lastVal.length });
+    if (v.length) { S({ a: 'type', t: v }); }
+    flash();
+  }
+  txt.value = '';
+  lastVal = '';
+}
+
+// ─── Real-time input ─────────────────────────────────
 let lastVal = '', debounce, compositionActive = false;
 
 txt.addEventListener('compositionstart', () => { compositionActive = true });
-txt.addEventListener('compositionend', () => { compositionActive = false });
+txt.addEventListener('compositionend', () => {
+  compositionActive = false;
+  const v = txt.value;
+  if (v.length > lastVal.length && v.startsWith(lastVal)) {
+    S({ a: 'type', t: v.slice(lastVal.length) }); flash();
+  } else if (v !== lastVal) {
+    S({ a: 'bs', n: lastVal.length });
+    if (v.length) { S({ a: 'type', t: v }); }
+    flash();
+  }
+  txt.value = '';
+  lastVal = '';
+});
+
+txt.addEventListener('keydown', e => {
+  if (compositionActive) return;
+  if (e.key === 'Backspace') {
+    S({ a: 'bs', n: 1 }); flash();
+  } else if (e.key === 'Delete') {
+    e.preventDefault(); S({ a: 'key', k: 'Delete' }); flash();
+  } else if (e.key === 'Enter') {
+    e.preventDefault(); S({ a: 'key', k: 'Return' }); flash();
+  }
+});
 
 txt.addEventListener('input', e => {
-  if (e.isComposing) return;
+  if (e.isComposing || compositionActive || skipNextInput) return;
   clearTimeout(debounce);
   debounce = setTimeout(() => {
-    const v = txt.value, old = lastVal;
-    if (v === old) return;
-    if (v.length > old.length && v.startsWith(old)) {
-      S({ a: 'type', t: v.slice(old.length) }); flash();
-    } else if (v.length < old.length && old.startsWith(v)) {
-      S({ a: 'bs', n: old.length - v.length }); flash();
-    } else {
-      S({ a: 'bs', n: old.length });
+    const v = txt.value;
+    if (v.length > lastVal.length && v.startsWith(lastVal)) {
+      S({ a: 'type', t: v.slice(lastVal.length) }); flash();
+    } else if (v.length < lastVal.length && lastVal.startsWith(v)) {
+      S({ a: 'bs', n: lastVal.length - v.length }); flash();
+    } else if (v !== lastVal) {
+      S({ a: 'bs', n: lastVal.length });
       if (v.length) { S({ a: 'type', t: v }); }
       flash();
     }
-    lastVal = v;
-  }, 30);
+    lastVal = '';
+    skipNextInput = true;
+    txt.value = '';
+    skipNextInput = false;
+  }, 10);
 });
 
-txt.addEventListener('compositionend', () => {
-  setTimeout(() => {
-    const v = txt.value, old = lastVal;
-    if (v !== old) {
-      if (v.length > old.length && v.startsWith(old)) {
-        S({ a: 'type', t: v.slice(old.length) }); flash();
-      } else if (v.length < old.length && old.startsWith(v)) {
-        S({ a: 'bs', n: old.length - v.length }); flash();
-      } else {
-        S({ a: 'bs', n: old.length });
-        if (v.length) { S({ a: 'type', t: v }); }
-        flash();
-      }
-      lastVal = v;
-    }
-  }, 0);
-});
-
-// ─── Touchpad ────────────────────────────────────────────
+// ─── Touchpad ────────────────────────────────────────
 const tp = $('touchpad');
+const scrollTag = $('scroll-tag');
+const scrollIcon = $('scroll-icon');
+const scrollText = $('scroll-text');
 let pts = {}, moved = false, scrolling = false, lastY = 0, tStart = 0;
 let lastTapT = 0, lastTapX = 0, lastTapY = 0;
 let pressing = false, pressTimer = null;
 let twoFingerT = 0, twoFingerMoved = false;
-const TH = 12, SENS = 6, SCR = .06;
+const TH = 8, SENS = 5;
+let scrollAcc = 0; // fractional scroll accumulator
 
-let accDx = 0, accDy = 0, accScr = 0, mvDirty = false;
+// Apply nonlinear acceleration curve (like laptop touchpad)
+function scrollCurve(delta) {
+  const abs = Math.abs(delta);
+  const sign = delta < 0 ? -1 : 1;
+  if (abs < 2) return sign * abs * 0.5;
+  if (abs < 8) return sign * (1 + (abs - 2) * 0.4);
+  return sign * (3.4 + (abs - 8) * 0.8);
+}
+
+let accDx = 0, accDy = 0, accScr = 0, mvDirty = false, mvScheduled = false;
 function flushMv() {
+  mvScheduled = false;
   if (mvDirty) {
     if (accDx || accDy) { S({ a: 'mv', x: accDx, y: accDy }); accDx = accDy = 0; }
     if (accScr) { S({ a: 'scr', y: accScr }); accScr = 0; }
     mvDirty = false;
   }
-  requestAnimationFrame(flushMv);
 }
-requestAnimationFrame(flushMv);
+function scheduleMv() {
+  mvDirty = true;
+  if (!mvScheduled) { mvScheduled = true; requestAnimationFrame(flushMv); }
+}
+
+function showTag(iconId, text) {
+  scrollIcon.querySelector('use').setAttribute('xlink:href', '#' + iconId);
+  scrollText.textContent = text;
+  scrollTag.style.display = 'flex';
+}
+function hideTag() { scrollTag.style.display = 'none'; }
 
 tp.addEventListener('touchstart', e => {
   e.preventDefault();
@@ -146,16 +246,14 @@ tp.addEventListener('touchstart', e => {
     pressTimer = setTimeout(() => {
       if (!moved && !scrolling) {
         pressing = true; S({ a: 'md', b: 1 });
-        $('scroll-tag').textContent = '✊ 长按拖动中';
-        $('scroll-tag').style.display = 'block';
+        showTag('icon-tuodong', '拖动');
       }
-    }, 500);
+    }, 400);
   }
   if (e.touches.length === 2) {
     scrolling = false; clearTimeout(pressTimer);
     twoFingerT = now; twoFingerMoved = false;
-    $('scroll-tag').textContent = '⬆⬇ 滚动';
-    $('scroll-tag').style.display = 'block';
+    showTag('icon-a-075_shuangzhigundong', '滚动');
     lastY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
   }
 }, { passive: false });
@@ -168,15 +266,26 @@ tp.addEventListener('touchmove', e => {
     if (Math.abs(t.clientX - p.sx) > TH || Math.abs(t.clientY - p.sy) > TH) {
       moved = true; if (!pressing) clearTimeout(pressTimer);
     }
-    accDx += dx * SENS; accDy += dy * SENS; mvDirty = true;
+    accDx += dx * SENS; accDy += dy * SENS; scheduleMv();
     p.x = t.clientX; p.y = t.clientY;
   }
   if (e.touches.length >= 2) {
     scrolling = true; twoFingerMoved = true;
-    $('scroll-tag').textContent = '⬆⬇ 滚动';
     const ay = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-    const d = lastY - ay;
-    if (Math.abs(d) > 1.5) { accScr += Math.round(d * SCR); mvDirty = true; lastY = ay; }
+    const rawDelta = lastY - ay;
+    if (rawDelta !== 0) {
+      // Apply acceleration curve
+      const curved = scrollCurve(rawDelta);
+      scrollAcc += curved;
+      // Send integer part, keep fractional remainder
+      const toSend = Math.trunc(scrollAcc);
+      if (toSend !== 0) {
+        accScr += toSend;
+        scrollAcc -= toSend;
+        scheduleMv();
+      }
+      lastY = ay;
+    }
   }
 }, { passive: false });
 
@@ -186,7 +295,7 @@ tp.addEventListener('touchend', e => {
 
   if (pressing) {
     pressing = false; S({ a: 'mu', b: 1 });
-    $('scroll-tag').style.display = 'none';
+    hideTag();
     for (const t of e.changedTouches) delete pts[t.identifier];
     if (e.touches.length === 0) { scrolling = false; twoFingerT = 0; }
     return;
@@ -195,9 +304,9 @@ tp.addEventListener('touchend', e => {
   if (e.touches.length === 0 && twoFingerT && !twoFingerMoved && now - twoFingerT < 200) {
     S({ a: 'clk', b: 3 });
     const t = e.changedTouches[0];
-    if (t) rip(t.clientX, t.clientY, '#533483');
+    if (t) rip(t.clientX, t.clientY, '#58a6ff');
     twoFingerT = 0; scrolling = false;
-    $('scroll-tag').style.display = 'none';
+    hideTag();
     for (const ct of e.changedTouches) delete pts[ct.identifier];
     return;
   }
@@ -206,12 +315,12 @@ tp.addEventListener('touchend', e => {
     const p = pts[t.identifier]; if (!p) continue;
     if (!moved && !scrolling && e.touches.length === 0 && now - tStart < 250) {
       const dt = now - lastTapT, dd = Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY);
-      if (dt < 350 && dd < 50) { S({ a: 'dbl' }); rip(t.clientX, t.clientY, '#e23e57'); lastTapT = 0; }
-      else { S({ a: 'clk', b: 1 }); rip(t.clientX, t.clientY, '#4ecca3'); lastTapT = now; lastTapX = t.clientX; lastTapY = t.clientY; }
+      if (dt < 350 && dd < 50) { S({ a: 'dbl' }); rip(t.clientX, t.clientY, '#f85149'); lastTapT = 0; }
+      else { S({ a: 'clk', b: 1 }); rip(t.clientX, t.clientY, '#3fb950'); lastTapT = now; lastTapX = t.clientX; lastTapY = t.clientY; }
     }
     delete pts[t.identifier];
   }
-  if (e.touches.length === 0) { scrolling = false; twoFingerT = 0; $('scroll-tag').style.display = 'none'; }
+  if (e.touches.length === 0) { scrolling = false; twoFingerT = 0; scrollAcc = 0; hideTag(); }
 }, { passive: false });
 
 function rip(x, y, c) {
@@ -219,74 +328,58 @@ function rip(x, y, c) {
   const b = tp.getBoundingClientRect();
   r.style.left = (x - b.left) + 'px'; r.style.top = (y - b.top) + 'px';
   const m = /^#(..)(..)(..)$/.exec(c);
-  r.style.background = `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},.4)`;
+  r.style.background = `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},.3)`;
   tp.appendChild(r); setTimeout(() => r.remove(), 400);
 }
 
 document.body.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
-// ─── Function Keys Drawer ───────────────────────────────
-const fkBtn = $('fk-btn');
-const fkDrawer = $('fk-drawer');
-const fkOverlay = $('fk-overlay');
-let drawerOpen = false;
+// ─── Function Keys ───────────────────────────────────
+const fkToggle = $('fk-toggle');
+const fkPanel = $('fk-panel');
 
-// Modifier lock state
+function toggleFk() {
+  fkPanel.classList.toggle('hidden');
+  fkToggle.classList.toggle('active');
+}
+
 const modState = { ctrl: false, shift: false, alt: false };
 
-function toggleDrawer() {
-  drawerOpen = !drawerOpen;
-  fkDrawer.classList.toggle('open', drawerOpen);
-  fkOverlay.classList.toggle('show', drawerOpen);
-  fkBtn.classList.toggle('active', drawerOpen);
-}
-
-// Build modifier prefix from locked state
 function getModPrefix() {
-  let prefix = '';
-  if (modState.ctrl) prefix += 'ctrl+';
-  if (modState.shift) prefix += 'shift+';
-  if (modState.alt) prefix += 'alt+';
-  return prefix;
+  let p = '';
+  if (modState.ctrl) p += 'ctrl+';
+  if (modState.shift) p += 'shift+';
+  if (modState.alt) p += 'alt+';
+  return p;
 }
 
-// Send a key with optional locked modifiers prepended
 function sendKey(key) {
-  const fullKey = getModPrefix() + key;
-  S({ a: 'key', k: fullKey });
+  S({ a: 'key', k: getModPrefix() + key });
   flash();
 }
 
-// Single keys
-document.querySelectorAll('.fk-btn[data-key]:not(.combo)').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const key = btn.dataset.key;
-    sendKey(key);
-  });
+document.querySelectorAll('.fk[data-key]:not(.combo)').forEach(btn => {
+  btn.addEventListener('click', () => sendKey(btn.dataset.key));
 });
 
-// Modifier lock buttons
-document.querySelectorAll('.fk-btn.modifier').forEach(btn => {
+document.querySelectorAll('.fk.mod').forEach(btn => {
   btn.addEventListener('click', () => {
     const mod = btn.dataset.mod;
     modState[mod] = !modState[mod];
-    btn.classList.toggle('active-mod', modState[mod]);
+    btn.classList.toggle('active', modState[mod]);
   });
 });
 
-// Combo keys (ignore locked modifiers, send the combo as-is)
-document.querySelectorAll('.fk-btn.combo').forEach(btn => {
+document.querySelectorAll('.fk.combo').forEach(btn => {
   btn.addEventListener('click', () => {
-    const key = btn.dataset.key;
-    S({ a: 'key', k: key });
+    S({ a: 'key', k: btn.dataset.key });
     flash();
   });
 });
 
-// Prevent touch events inside drawer from reaching touchpad
-fkDrawer.addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
-fkDrawer.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
-fkDrawer.addEventListener('touchend', e => e.stopPropagation(), { passive: true });
+fkPanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
+fkPanel.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
+fkPanel.addEventListener('touchend', e => e.stopPropagation(), { passive: true });
 
-// ─── Init ────────────────────────────────────────────────
+// ─── Init ────────────────────────────────────────────
 connect();

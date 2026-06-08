@@ -3,153 +3,225 @@
 <head>
 <meta charset="UTF-8">
 <title>Remote Touchpad</title>
+<script src="iconfont/iconfont.js"></script>
 <style>
+.icon{width:1em;height:1em;vertical-align:-0.15em;fill:currentColor;overflow:hidden}
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#1a1a2e;color:#eee;font-family:-apple-system,system-ui,sans-serif;
-  display:flex;flex-direction:column;align-items:center;padding:20px;gap:16px;
-  min-height:100vh;-webkit-app-region:drag}
-h1{font-size:20px;color:#4ecca3;-webkit-app-region:drag}
+body{background:#0f1117;color:#c9d1d9;font-family:-apple-system,system-ui,sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:12px 20px 20px;gap:14px;
+  min-height:100vh}
 
-.panel{background:#16213e;border-radius:12px;padding:16px;width:100%;max-width:360px;
-  -webkit-app-region:no-drag}
+.titlebar{display:flex;align-items:center;justify-content:space-between;
+  width:100%;height:36px;padding:0 4px;-webkit-user-select:none;user-select:none;
+  flex-shrink:0}
+.titlebar-left{display:flex;align-items:center;gap:8px}
+.titlebar-icon{flex-shrink:0}
+.titlebar-title{font-size:13px;color:#8b949e;font-weight:500}
+.titlebar-controls{display:flex;gap:2px}
+.titlebar-btn{width:36px;height:28px;border:none;background:transparent;
+  color:#8b949e;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;border-radius:4px;transition:all .15s}
+.titlebar-btn:hover{background:#21262d;color:#c9d1d9}
+.titlebar-btn.btn-close:hover{background:#da3633;color:#fff}
 
-/* 端口配置 */
+.panel{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:14px;
+  width:100%;max-width:360px}
+
 .port-row{display:flex;align-items:center;gap:10px}
-.port-row label{font-size:14px;color:#aaa}
-.port-row input{width:80px;padding:6px 10px;border:1px solid #333;border-radius:6px;
-  background:#0f3460;color:#eee;font-size:14px;text-align:center}
-.port-row input:disabled{opacity:.5}
-#toggle-btn{flex:1;padding:10px;border:none;border-radius:8px;font-size:14px;
-  font-weight:600;cursor:pointer;background:#533483;color:#eee;transition:all .15s}
+.port-row label{font-size:13px;color:#8b949e}
+.port-row input{width:72px;padding:6px 8px;border:1px solid #30363d;border-radius:6px;
+  background:#0d1117;color:#c9d1d9;font-size:13px;text-align:center;outline:none}
+.port-row input:focus{border-color:#238636}
+.port-row input:disabled{opacity:.4}
+#toggle-btn{flex:1;padding:9px;border:none;border-radius:8px;font-size:13px;
+  font-weight:600;cursor:pointer;background:#238636;color:#fff;transition:all .15s}
+#toggle-btn:hover{background:#2ea043}
 #toggle-btn:active{transform:scale(.97)}
-#toggle-btn.running{background:#e23e57}
+#toggle-btn.running{background:#da3633}
+#toggle-btn.running:hover{background:#f85149}
 
-/* 连接信息 */
-#info{text-align:center;font-size:13px;color:#4ecca3;min-height:20px;
-  cursor:pointer;margin-top:8px;word-break:break-all}
+#info{text-align:center;font-size:12px;color:#3fb950;min-height:18px;
+  cursor:pointer;margin-top:6px;word-break:break-all}
 #info:hover{text-decoration:underline}
-#hint{text-align:center;font-size:11px;color:#666;min-height:16px}
+#hint{text-align:center;font-size:11px;color:#484f58;min-height:14px}
 
-/* 二维码 */
-#qr-box{display:flex;justify-content:center;min-height:160px;align-items:center}
-#qr-box svg{max-width:160px;max-height:160px}
-#qr-box img{max-width:160px;max-height:160px}
-#qr-placeholder{color:#444;font-size:12px}
+#qr-box{display:flex;justify-content:center;min-height:140px;align-items:center}
+#qr-box svg{max-width:140px;max-height:140px}
+#qr-placeholder{color:#30363d;font-size:12px}
 
-/* 设备列表 */
-.device-title{font-size:14px;font-weight:600;margin-bottom:8px;color:#aaa}
-#devices{background:#0f3460;border-radius:8px;padding:8px;min-height:80px;
-  max-height:160px;overflow-y:auto;font-family:Consolas,monospace;font-size:12px;
-  line-height:1.6;white-space:pre-wrap;word-break:break-all}
-#devices:empty::before{content:'暂无设备连接';color:#444}
+.device-status{display:flex;align-items:center;gap:10px;padding:10px 12px}
+.status-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;transition:all .3s}
+.status-dot.off{background:#21262d}
+.status-dot.on{background:#3fb950;box-shadow:0 0 8px rgba(63,185,80,.3)}
+.status-text{font-size:13px;color:#8b949e}
+.status-text .device-name{color:#f0f6fc;font-weight:500}
 
-/* 通知 */
+#pin-box{display:none;text-align:center;padding:4px 0}
+#pin-box.show{display:block}
+.pin-label{font-size:11px;color:#8b949e;margin-bottom:4px}
+.pin-code{font-size:28px;font-weight:700;color:#3fb950;
+  letter-spacing:6px;font-family:Consolas,monospace}
+
 .copied{position:fixed;top:10px;left:50%;transform:translateX(-50%);
-  background:#4ecca3;color:#1a1a2e;padding:4px 16px;border-radius:6px;
-  font-size:12px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none}
+  background:#238636;color:#fff;padding:4px 16px;border-radius:16px;
+  font-size:12px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;z-index:100}
 .copied.show{opacity:1}
 </style>
 </head>
 <body>
-<h1>🖱️ Remote Touchpad</h1>
+<!-- 自定义标题栏 -->
+<div class="titlebar" data-tauri-drag-region>
+  <div class="titlebar-left" data-tauri-drag-region>
+    <svg class="titlebar-icon" viewBox="0 0 1024 1024" width="20" height="20" style="color:#58a6ff"><use xlink:href="#icon-chukongban"></use></svg>
+    <span class="titlebar-title" data-tauri-drag-region>Remote Touchpad</span>
+  </div>
+  <div class="titlebar-controls">
+    <button class="titlebar-btn" id="btn-minimize" title="最小化">
+      <svg width="10" height="1" viewBox="0 0 10 1"><path d="M0 0h10v1H0z" fill="currentColor"/></svg>
+    </button>
+    <button class="titlebar-btn" id="btn-maximize" title="最大化">
+      <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" fill="none"/></svg>
+    </button>
+    <button class="titlebar-btn btn-close" id="btn-close" title="关闭">
+      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 0L0 1l4 4-4 4 1 1 4-4 4 4 1-1-4-4 4-4-1-1-4 4z" fill="currentColor"/></svg>
+    </button>
+  </div>
+</div>
+
+<h1 style="font-size:17px;color:#3fb950;font-weight:600;display:flex;align-items:center"><svg class="icon" style="width:36px;height:36px;margin-right:8px;color:#58a6ff"><use xlink:href="#icon-chukongban"></use></svg>Remote Touchpad</h1>
 
 <div class="panel">
   <div class="port-row">
-    <label>端口:</label>
+    <label>端口</label>
     <input id="port-input" type="number" value="8765" min="1" max="65535">
-    <button id="toggle-btn" onclick="toggleServer()">▶ 启动服务器</button>
+    <button id="toggle-btn">启动</button>
   </div>
   <div id="info"></div>
   <div id="hint"></div>
 </div>
 
 <div class="panel">
-  <div id="qr-box"><span id="qr-placeholder">启动服务器后显示二维码</span></div>
+  <div id="qr-box"><span id="qr-placeholder">启动后显示二维码</span></div>
+  <div id="pin-box">
+    <div class="pin-label">配对码</div>
+    <div class="pin-code" id="pin-code">------</div>
+  </div>
 </div>
 
 <div class="panel">
-  <div class="device-title">已连接设备</div>
-  <div id="devices"></div>
+  <div class="device-status">
+    <div class="status-dot off" id="status-dot"></div>
+    <div class="status-text" id="status-text">等待连接...</div>
+  </div>
 </div>
 
-<div class="copied" id="copied-toast">已复制到剪贴板</div>
+<div class="copied" id="copied-toast">已复制</div>
 
 <script>
-const { invoke } = window.__TAURI__.core;
-
+const infoEl = document.getElementById('info');
 const portInput = document.getElementById('port-input');
 const toggleBtn = document.getElementById('toggle-btn');
-const infoEl = document.getElementById('info');
 const hintEl = document.getElementById('hint');
 const qrBox = document.getElementById('qr-box');
-const devicesEl = document.getElementById('devices');
 const copiedToast = document.getElementById('copied-toast');
+const statusDot = document.getElementById('status-dot');
+const statusText = document.getElementById('status-text');
 
-let running = false;
-let pollTimer = null;
+let invoke, running = false, pollTimer = null, deviceConnected = false;
 
-async function toggleServer() {
+try {
+  if (window.__TAURI__ && window.__TAURI__.core) {
+    invoke = window.__TAURI__.core.invoke;
+  } else if (window.__TAURI_INTERNALS__) {
+    invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+  }
+  if (invoke) infoEl.textContent = '就绪';
+} catch (e) {
+  infoEl.textContent = '初始化失败: ' + e;
+  infoEl.style.color = '#f85149';
+}
+
+toggleBtn.addEventListener('click', async () => {
+  if (!invoke) { infoEl.textContent = '未初始化'; return; }
   if (!running) {
     const port = parseInt(portInput.value);
-    if (port < 1 || port > 65535) { infoEl.textContent = '❌ 端口无效'; return; }
+    if (port < 1 || port > 65535) { infoEl.textContent = '端口无效'; return; }
+    infoEl.textContent = '启动中...';
+    infoEl.style.color = '#3fb950';
     try {
-      const status = await invoke('start_server_cmd', { port });
+      const status = await Promise.race([
+        invoke('start_server_cmd', { port }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('超时')), 15000))
+      ]);
       onStarted(status);
     } catch (e) {
-      infoEl.textContent = '❌ ' + e;
+      infoEl.textContent = e.message || String(e);
+      infoEl.style.color = '#f85149';
     }
   } else {
-    try {
-      await invoke('stop_server_cmd');
-      onStopped();
-    } catch (e) {
-      infoEl.textContent = '❌ ' + e;
-    }
+    try { await invoke('stop_server_cmd'); onStopped(); }
+    catch (e) { infoEl.textContent = typeof e === 'object' ? JSON.stringify(e) : e; }
   }
-}
+});
 
 function onStarted(status) {
   running = true;
-  toggleBtn.textContent = '⏹ 停止服务器';
+  toggleBtn.textContent = '停止';
   toggleBtn.classList.add('running');
   portInput.disabled = true;
-  infoEl.textContent = '📱 ' + status.url;
-  hintEl.textContent = '手机扫描下方二维码或输入地址连接';
+  infoEl.textContent = status.url;
+  infoEl.style.color = '#3fb950';
+  hintEl.textContent = '扫码或输入地址连接';
   qrBox.innerHTML = status.qr_svg;
+  if (status.pin) {
+    document.getElementById('pin-code').textContent = status.pin;
+    document.getElementById('pin-box').classList.add('show');
+  }
+  setStatus('idle');
   pollTimer = setInterval(pollStatus, 2000);
 }
 
 function onStopped() {
-  running = false;
-  toggleBtn.textContent = '▶ 启动服务器';
+  running = false; deviceConnected = false;
+  toggleBtn.textContent = '启动';
   toggleBtn.classList.remove('running');
   portInput.disabled = false;
-  infoEl.textContent = '服务器已停止';
+  infoEl.textContent = '已停止';
+  infoEl.style.color = '#3fb950';
   hintEl.textContent = '';
-  qrBox.innerHTML = '<span id="qr-placeholder">启动服务器后显示二维码</span>';
-  devicesEl.textContent = '';
+  qrBox.innerHTML = '<span id="qr-placeholder">启动后显示二维码</span>';
+  document.getElementById('pin-box').classList.remove('show');
+  setStatus('off');
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
+
+function setStatus(state, name) {
+  statusDot.className = 'status-dot';
+  if (state === 'connected') {
+    statusDot.classList.add('on');
+    statusText.innerHTML = '<span class="device-name">' + escHtml(name||'设备') + '</span> 已连接';
+    deviceConnected = true;
+  } else {
+    statusDot.classList.add('off');
+    statusText.textContent = state === 'off' ? '未启动' : '等待连接...';
+    deviceConnected = false;
+  }
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 async function pollStatus() {
   try {
     const status = await invoke('get_status');
     if (!status.running) { onStopped(); return; }
-    // Update devices from events
-    if (status.events && status.events.length > 0) {
-      status.events.forEach(e => {
-        devicesEl.textContent += e + '\n';
-        devicesEl.scrollTop = devicesEl.scrollHeight;
-      });
-    }
-  } catch (e) {
-    // Server might have stopped
-  }
+    if (status.device_name) setStatus('connected', status.device_name);
+    else if (deviceConnected) setStatus('idle');
+    if (status.pin) document.getElementById('pin-code').textContent = status.pin;
+  } catch (e) {}
 }
 
-// Click URL to copy
 infoEl.addEventListener('click', () => {
-  const text = infoEl.textContent.replace('📱 ', '');
+  const text = infoEl.textContent;
   if (text && text.includes('http')) {
     navigator.clipboard.writeText(text);
     copiedToast.classList.add('show');
@@ -157,10 +229,21 @@ infoEl.addEventListener('click', () => {
   }
 });
 
-// Auto-start on load
-invoke('get_status').then(status => {
-  if (status.running) onStarted(status);
-}).catch(() => {});
+if (invoke) {
+  invoke('get_status').then(s => { if (s.running) onStarted(s); }).catch(() => {});
+}
+
+// 窗口控制按钮
+async function windowCmd(cmd) {
+  try {
+    await window.__TAURI_INTERNALS__.invoke('plugin:window|' + cmd);
+  } catch (e) {
+    try { await window.__TAURI_INTERNALS__.invoke(cmd); } catch (_) {}
+  }
+}
+document.getElementById('btn-minimize').addEventListener('click', () => windowCmd('minimize'));
+document.getElementById('btn-maximize').addEventListener('click', () => windowCmd('toggle_maximize'));
+document.getElementById('btn-close').addEventListener('click', () => windowCmd('close'));
 </script>
 </body>
 </html>
