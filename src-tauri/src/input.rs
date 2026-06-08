@@ -10,7 +10,7 @@ use tracing::info;
 
 /// Cross-platform input simulator using enigo (works on Windows, macOS, Linux).
 pub struct InputSimulator {
-    enigo: Mutex<Enigo>,
+    enigo: Mutex<Option<Enigo>>,
 }
 
 impl InputSimulator {
@@ -22,25 +22,52 @@ impl InputSimulator {
             .map_err(|e| anyhow::anyhow!("Failed to init enigo: {}", e))?;
         info!("Enigo input simulator initialized");
         Ok(Self {
-            enigo: Mutex::new(enigo),
+            enigo: Mutex::new(Some(enigo)),
         })
     }
 
+    /// Create without initializing enigo (will try lazy init on first use)
+    pub fn new_lazy() -> Self {
+        Self {
+            enigo: Mutex::new(None),
+        }
+    }
+
+    fn get_enigo(&self) -> Result<std::sync::MutexGuard<'_, Option<Enigo>>> {
+        let guard = self.enigo.lock().unwrap();
+        if guard.is_none() {
+            drop(guard);
+            let mut guard = self.enigo.lock().unwrap();
+            if guard.is_none() {
+                let enigo = Enigo::new(&Settings::default())
+                    .map_err(|e| anyhow::anyhow!("Lazy enigo init failed: {}", e))?;
+                *guard = Some(enigo);
+                info!("Enigo input simulator initialized (lazy)");
+            }
+            Ok(guard)
+        } else {
+            Ok(guard)
+        }
+    }
+
     pub async fn mouse_move(&self, dx: f64, dy: f64) -> Result<()> {
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
         e.move_mouse(dx as i32, dy as i32, Rel)
             .map_err(|e| anyhow::anyhow!("mouse_move: {}", e))
     }
 
     pub async fn mouse_click(&self, button: u8) -> Result<()> {
         let btn = map_button(button);
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
         e.button(btn, Click)
             .map_err(|e| anyhow::anyhow!("mouse_click: {}", e))
     }
 
     pub async fn mouse_double_click(&self) -> Result<()> {
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
         e.button(Button::Left, Click)
             .map_err(|e| anyhow::anyhow!("dbl_click 1: {}", e))?;
         e.button(Button::Left, Click)
@@ -49,14 +76,16 @@ impl InputSimulator {
 
     pub async fn mouse_down(&self, button: u8) -> Result<()> {
         let btn = map_button(button);
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
         e.button(btn, Press)
             .map_err(|e| anyhow::anyhow!("mouse_down: {}", e))
     }
 
     pub async fn mouse_up(&self, button: u8) -> Result<()> {
         let btn = map_button(button);
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
         e.button(btn, Release)
             .map_err(|e| anyhow::anyhow!("mouse_up: {}", e))
     }
@@ -64,7 +93,8 @@ impl InputSimulator {
     pub async fn mouse_scroll(&self, dy: f64) -> Result<()> {
         let amount = dy.round() as i32;
         if amount == 0 { return Ok(()); }
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
         e.scroll(amount, enigo::Axis::Vertical)
             .map_err(|e| anyhow::anyhow!("scroll: {}", e))
     }
@@ -72,7 +102,8 @@ impl InputSimulator {
     /// Send a key combo like "ctrl+c", "Escape", "shift+Tab".
     pub async fn send_key(&self, key: &str) -> Result<()> {
         let (modifiers, main_key) = parse_key_string(key);
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
 
         // Press modifiers
         for m in &modifiers {
@@ -104,7 +135,8 @@ impl InputSimulator {
                 // Try clipboard paste first (reliable for CJK)
                 if self.clipboard_paste(line).await.is_err() {
                     // Fallback: enigo text input
-                    let mut e = self.enigo.lock().unwrap();
+                    let mut guard = self.get_enigo()?;
+                    let e = guard.as_mut().unwrap();
                     e.text(line)
                         .map_err(|e| anyhow::anyhow!("text: {}", e))?;
                 }
@@ -129,7 +161,8 @@ impl InputSimulator {
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
 
         // Ctrl+V
-        let mut e = self.enigo.lock().unwrap();
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
         e.key(enigo::Key::Control, Press).map_err(|e| anyhow::anyhow!("ctrl press: {}", e))?;
         e.key(enigo::Key::Unicode('v'), Click).map_err(|e| anyhow::anyhow!("v click: {}", e))?;
         e.key(enigo::Key::Control, Release).map_err(|e| anyhow::anyhow!("ctrl release: {}", e))?;

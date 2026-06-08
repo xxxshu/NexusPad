@@ -74,8 +74,13 @@ async fn start_server_cmd(
         return Err("Server already running".into());
     }
 
-    let input_sim = input::InputSimulator::new().await
-        .map_err(|e| e.to_string())?;
+    let input_sim = match input::InputSimulator::new().await {
+        Ok(sim) => sim,
+        Err(e) => {
+            tracing::warn!("InputSimulator init failed (will retry on first input): {}", e);
+            input::InputSimulator::new_lazy()
+        }
+    };
 
     let frontend_dir: PathBuf = app_handle
         .path()
