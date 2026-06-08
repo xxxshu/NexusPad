@@ -202,8 +202,6 @@ pub fn run() {
 
 /// CLI mode: start server without Tauri GUI
 pub fn run_cli() {
-    let _ = tracing_subscriber::fmt::try_init();
-
     let port: u16 = std::env::args()
         .collect::<Vec<_>>()
         .windows(2)
@@ -216,7 +214,7 @@ pub fn run_cli() {
         let input_sim = match input::InputSimulator::new().await {
             Ok(sim) => sim,
             Err(e) => {
-                eprintln!("⚠ InputSimulator init failed (will retry on first input): {}", e);
+                eprintln!("! InputSimulator init failed: {}", e);
                 input::InputSimulator::new_lazy()
             }
         };
@@ -231,38 +229,30 @@ pub fn run_cli() {
         let local_ip = server::get_local_ip();
         let url = format!("http://{}:{}", local_ip, port);
 
-        println!("╔══════════════════════════════════════╗");
-        println!("║       Remote Touchpad (CLI)          ║");
-        println!("╠══════════════════════════════════════╣");
-        println!("║  URL: {:<30} ║", url);
-        println!("║  PIN: {:<30} ║", pin);
-        println!("╚══════════════════════════════════════╝");
-
-        // Print QR code
-        let qr_svg = server::generate_qr_svg(&url);
-        // Extract QR pattern as ASCII
-        println!("\nScan QR code or open {} in phone browser\n", url);
+        eprintln!("========================================");
+        eprintln!("  Remote Touchpad (CLI)");
+        eprintln!("  URL: {}", url);
+        eprintln!("  PIN: {}", pin);
+        eprintln!("========================================");
 
         let (stop_tx, stop_rx) = tokio::sync::broadcast::channel(1);
         let state_clone = server_state.clone();
 
         tokio::spawn(async move {
             if let Err(e) = server::start_server(port, state_clone, stop_rx).await {
-                eprintln!("❌ Server error: {}", e);
+                eprintln!("! Server error: {}", e);
             }
         });
 
-        println!("✅ Server started on port {}", port);
-        println!("Press Enter to stop...");
+        eprintln!("Server started on port {}", port);
+        eprintln!("Press Ctrl+C to stop...");
 
-        // Wait for Enter key
-        let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
-        let mut line = String::new();
-        let _ = tokio::io::AsyncBufReadExt::read_line(&mut stdin, &mut line).await;
+        // Wait for Ctrl+C
+        let _ = tokio::signal::ctrl_c().await;
 
-        println!("Stopping server...");
+        eprintln!("Stopping server...");
         let _ = stop_tx.send(());
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        println!("Server stopped.");
+        eprintln!("Server stopped.");
     });
 }
