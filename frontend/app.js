@@ -3,6 +3,52 @@ const $ = id => document.getElementById(id);
 let ws, reconn, hasControl = false, hasEverControlled = false, isProot = false;
 const st = $('status');
 
+// ─── Haptic feedback ────────────────────────────────
+let hapticAudioCtx = null;
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+
+function vibrate(pattern) {
+  if ('vibrate' in navigator) navigator.vibrate(pattern);
+  if (isIOS) {
+    try {
+      if (!hapticAudioCtx) hapticAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (hapticAudioCtx.state === 'suspended') hapticAudioCtx.resume();
+      const ms = Array.isArray(pattern) ? pattern.reduce((a, b, i) => i % 2 === 0 ? a + b : a, 0) : pattern;
+      const dur = ms / 1000;
+      const osc = hapticAudioCtx.createOscillator();
+      const gain = hapticAudioCtx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(1, hapticAudioCtx.currentTime);
+      gain.gain.setValueAtTime(0.002, hapticAudioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, hapticAudioCtx.currentTime + dur);
+      osc.connect(gain); gain.connect(hapticAudioCtx.destination);
+      osc.start(); osc.stop(hapticAudioCtx.currentTime + dur);
+    } catch {}
+  }
+}
+const hapticTap = () => vibrate(15);
+const hapticDoubleTap = () => vibrate([12, 50, 12]);
+const hapticDragStart = () => vibrate(30);
+const hapticDragEnd = () => vibrate(18);
+const hapticKeyPress = () => vibrate(12);
+const hapticBtnPress = () => vibrate(10);
+
+// Scroll tick: distance-based, throttled (guide §3.4)
+let scrollTickDist = 0, lastScrollTickT = 0;
+const SCROLL_TICK_DIST = 50;   // px per tick
+const SCROLL_TICK_MIN_MS = 40; // min interval
+function scrollTickStep(dy) {
+  scrollTickDist += Math.abs(dy);
+  const now = Date.now();
+  if (scrollTickDist >= SCROLL_TICK_DIST && now - lastScrollTickT >= SCROLL_TICK_MIN_MS) {
+    const intensity = Math.min(1.0, scrollTickDist / 200);
+    vibrate(Math.round(8 + intensity * 12));
+    scrollTickDist = 0;
+    lastScrollTickT = now;
+  }
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden && 'vibrate' in navigator) navigator.vibrate(0); });
+
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => { st.textContent = '已连接'; st.className = 'ok'; clearTimeout(reconn) };
@@ -309,18 +355,32 @@ osk.addEventListener('pointerdown', e => {
   e.preventDefault();
   e.stopPropagation();
   btn.classList.add('pressed');
-  if (btn.dataset.action) handleOskAction(btn.dataset.action);
+  hapticKeyPress();
+  if (btn.dataset.action) {
+    handleOskAction(btn.dataset.action);
+    // Long-press repeat for backspace
+    if (btn.dataset.action === 'backspace') {
+      clearTimeout(bsRepeatTimer);
+      bsRepeatTimer = setTimeout(() => {
+        bsRepeatId = setInterval(() => handleOskAction('backspace'), 80);
+      }, 400);
+    }
+  }
   else if (btn.dataset.k) handleOskKey(btn.dataset.k);
 }, { passive: false });
+
+let bsRepeatTimer, bsRepeatId;
 
 osk.addEventListener('pointerup', e => {
   const btn = e.target.closest('.osk-key');
   if (btn) btn.classList.remove('pressed');
+  clearTimeout(bsRepeatTimer); clearInterval(bsRepeatId);
 });
 
 osk.addEventListener('pointerleave', e => {
   const btn = e.target.closest('.osk-key');
   if (btn) btn.classList.remove('pressed');
+  clearTimeout(bsRepeatTimer); clearInterval(bsRepeatId);
 }, true);
 
 function handleOskKey(k) {
@@ -470,7 +530,7 @@ function detectGesture() {
   const centroidDy = (f0.y + f1.y) / 2 - (f0.sy + f1.sy) / 2;
   if (dot > 0 && (Math.abs(centroidDx) > TH || Math.abs(centroidDy) > TH)) {
     gesture = 'scroll';
-    scrFrac = 0;
+    scrFrac = 0; scrollTickDist = 0; lastScrollTickT = 0;
     showTag('icon-a-075_shuangzhigundong', '滚动');
     return;
   }
@@ -493,7 +553,7 @@ tp.addEventListener('touchstart', e => {
     clearTimeout(pressTimer);
     pressTimer = setTimeout(() => {
       if (!moved && gesture === 'none' && touchActive) {
-        pressing = true; S({ a: 'md', b: 1 });
+        pressing = true; S({ a: 'md', b: 1 }); hapticDragStart();
         gesture = 'drag';
         showTag('icon-tuodong', '拖动');
       }
@@ -551,6 +611,7 @@ tp.addEventListener('touchmove', e => {
       // Calculate delta BEFORE updating positions
       const dx = (f0.x + f1.x) / 2 - (f0.sx + f1.sx) / 2;
       const dy = -((f0.y + f1.y) / 2 - (f0.sy + f1.sy) / 2); // negate for natural scroll
+      scrollTickStep(Math.hypot(dx, dy));
       const cdx = scrollCurve(dx);
       const cdy = scrollCurve(dy);
       if (Math.abs(cdx) > Math.abs(cdy)) {
@@ -596,7 +657,7 @@ tp.addEventListener('touchend', e => {
   if (e.touches.length === 0) {
     touchActive = false;
     if (pressing) {
-      pressing = false; S({ a: 'mu', b: 1 }); hideTag();
+      pressing = false; S({ a: 'mu', b: 1 }); hapticDragEnd(); hideTag();
       gesture = 'none'; scrFrac = 0; pinchD0 = 0; pinchAcc = 0;
       return;
     }
@@ -615,8 +676,8 @@ tp.addEventListener('touchend', e => {
       const t = e.changedTouches[0];
       if (t) {
         const dt = now - lastTapT, dd = Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY);
-        if (dt < 350 && dd < 50) { S({ a: 'dbl' }); rip(t.clientX, t.clientY, '#f85149'); lastTapT = 0; }
-        else { S({ a: 'clk', b: 1 }); rip(t.clientX, t.clientY, '#3fb950'); lastTapT = now; lastTapX = t.clientX; lastTapY = t.clientY; }
+        if (dt < 350 && dd < 50) { S({ a: 'dbl' }); hapticDoubleTap(); rip(t.clientX, t.clientY, '#f85149'); lastTapT = 0; }
+        else { S({ a: 'clk', b: 1 }); hapticTap(); rip(t.clientX, t.clientY, '#3fb950'); lastTapT = now; lastTapX = t.clientX; lastTapY = t.clientY; }
       }
     }
     gesture = 'none'; scrFrac = 0; pinchD0 = 0; pinchAcc = 0; hideTag();
@@ -651,8 +712,10 @@ const fkToggle = $('fk-toggle');
 const fkPanel = $('fk-panel');
 
 function toggleFk() {
+  const opening = fkPanel.classList.contains('hidden');
   fkPanel.classList.toggle('hidden');
   fkToggle.classList.toggle('active');
+  osk.classList.toggle('fk-open', opening);
 }
 
 const modState = { ctrl: false, shift: false, alt: false };
@@ -671,10 +734,12 @@ function sendKey(key) {
 }
 
 document.querySelectorAll('.fk[data-key]:not(.combo)').forEach(btn => {
+  btn.addEventListener('pointerdown', () => hapticBtnPress());
   btn.addEventListener('click', () => sendKey(btn.dataset.key));
 });
 
 document.querySelectorAll('.fk.mod').forEach(btn => {
+  btn.addEventListener('pointerdown', () => hapticBtnPress());
   btn.addEventListener('click', () => {
     const mod = btn.dataset.mod;
     modState[mod] = !modState[mod];
@@ -683,6 +748,7 @@ document.querySelectorAll('.fk.mod').forEach(btn => {
 });
 
 document.querySelectorAll('.fk.combo').forEach(btn => {
+  btn.addEventListener('pointerdown', () => hapticBtnPress());
   btn.addEventListener('click', () => {
     S({ a: 'key', k: btn.dataset.key });
     flash();

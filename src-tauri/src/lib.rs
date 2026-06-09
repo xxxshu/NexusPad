@@ -213,9 +213,12 @@ pub fn run_cli() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     rt.block_on(async {
         let input_sim = match input::InputSimulator::new().await {
-            Ok(sim) => sim,
+            Ok(sim) => {
+                eprintln!("[ok] InputSimulator ready");
+                sim
+            }
             Err(e) => {
-                eprintln!("! InputSimulator init failed: {}", e);
+                eprintln!("[warn] InputSimulator failed: {}", e);
                 input::InputSimulator::new_lazy()
             }
         };
@@ -230,30 +233,35 @@ pub fn run_cli() {
         let local_ip = server::get_local_ip();
         let url = format!("http://{}:{}", local_ip, port);
 
-        eprintln!("========================================");
-        eprintln!("  Remote Touchpad (CLI)");
-        eprintln!("  URL: {}", url);
-        eprintln!("  PIN: {}", pin);
-        eprintln!("========================================");
+        eprintln!("[info] Local IP: {}", local_ip);
+        eprintln!("[info] Port: {}", port);
+        eprintln!("[info] PIN: {}", pin);
+        eprintln!("[info] URL: {}", url);
 
         let (stop_tx, stop_rx) = tokio::sync::broadcast::channel(1);
         let state_clone = server_state.clone();
 
-        tokio::spawn(async move {
-            if let Err(e) = server::start_server(port, state_clone, stop_rx).await {
-                eprintln!("! Server error: {}", e);
+        let server_handle = tokio::spawn(async move {
+            match server::start_server(port, state_clone, stop_rx).await {
+                Ok(()) => eprintln!("[info] Server exited normally"),
+                Err(e) => eprintln!("[error] Server error: {}", e),
             }
         });
 
-        eprintln!("Server started on port {}", port);
-        eprintln!("Press Ctrl+C to stop...");
+        // Give server a moment to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        eprintln!("[ok] Server running on port {}", port);
+        eprintln!("Open {} in phone browser", url);
+        eprintln!("PIN: {}", pin);
+        eprintln!("Press Ctrl+C to stop");
 
         // Wait for Ctrl+C
         let _ = tokio::signal::ctrl_c().await;
 
-        eprintln!("Stopping server...");
+        eprintln!("Stopping...");
         let _ = stop_tx.send(());
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        eprintln!("Server stopped.");
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), server_handle).await;
+        eprintln!("Stopped.");
     });
 }

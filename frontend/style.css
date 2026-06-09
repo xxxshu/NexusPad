@@ -98,25 +98,31 @@ html,body{height:100%;width:100%;background:#0f1117;color:#c9d1d9;
   opacity:0.001;overflow:hidden;padding:0;outline:none}
 
 /* ─── On-Screen Keyboard ──────────────────────────── */
-#osk{background:#0d1117;border-top:1px solid var(--border);
-  padding:6px 4px 8px;flex-shrink:0;
-  display:flex;flex-direction:column;gap:3px}
-#osk.hidden{display:none}
-.osk-layer{display:flex;flex-direction:column;gap:3px}
-.osk-row{display:flex;gap:3px;justify-content:center}
+#osk{position:fixed;bottom:0;left:25vw;right:0;height:33vh;
+  background:#0d1117;border-top:1px solid var(--border);
+  display:flex;flex-direction:column;
+  padding:6px 4px 8px;gap:3px;z-index:10;
+  user-select:none;-webkit-user-select:none;
+  transform:translateY(0);visibility:visible;pointer-events:auto;
+  transition:transform .3s ease,left .25s ease,height .25s ease,visibility 0s}
+#osk:not(.fk-open){left:0}
+#osk.hidden{transform:translateY(100%);visibility:hidden;pointer-events:none;
+  transition:transform .3s ease,left .25s ease,height .25s ease,visibility 0s .3s}
+.osk-layer{display:flex;flex-direction:column;gap:3px;flex:1}
+.osk-row{display:flex;gap:3px;justify-content:center;flex:1;min-height:0}
 .osk-spacer-05{flex:.5}
-.osk-key{flex:1;max-width:38px;height:38px;
+.osk-key{flex:1;
   border:1px solid #30363d;border-radius:6px;
   background:#1c2128;color:#c9d1d9;
-  font-size:16px;font-weight:500;
+  font-size:clamp(12px,2.5vw,18px);font-weight:500;
   cursor:pointer;touch-action:manipulation;
   display:flex;align-items:center;justify-content:center;
   transition:background .06s,transform .06s;
   user-select:none;-webkit-user-select:none}
 .osk-key:active,.osk-key.pressed{background:#30363d;transform:scale(.93)}
-.osk-key.osk-mod{background:#21262d;font-size:13px;font-weight:600;color:#8b949e}
-.osk-key.osk-wide{flex:1.5;max-width:56px}
-.osk-key.osk-space{flex:6;max-width:none;font-size:12px;color:#484f58}
+.osk-key.osk-mod{background:#21262d;font-size:clamp(10px,2vw,14px);font-weight:600;color:#8b949e}
+.osk-key.osk-wide{flex:1.5}
+.osk-key.osk-space{flex:6;font-size:clamp(10px,2vw,13px);color:#484f58}
 .osk-key.active{background:#238636;border-color:#2ea043;color:#fff}
 
 /* ─── Sent indicator ──────────────────────────────── */
@@ -181,8 +187,7 @@ html,body{height:100%;width:100%;background:#0f1117;color:#c9d1d9;
   #topbar{padding:4px 8px}
   #status{font-size:10px}
   .top-btn{width:36px;height:28px}
-  .osk-key{height:32px;font-size:14px;max-width:34px}
-  #osk{padding:4px 3px 6px;gap:2px}
+  #osk{height:50vh;padding:4px 3px 6px;gap:2px}
 }
 
 /* ─── Reduced motion ──────────────────────────────── */

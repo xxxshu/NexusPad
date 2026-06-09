@@ -620,6 +620,18 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
                     Err(e) => warn!("IME toggle spawn error: {}", e),
                 }
             }
+            // On Windows: use ImmGetDefaultIMEWnd + SendMessage to toggle IME state
+            #[cfg(target_os = "windows")]
+            {
+                let want_active = mode == "zh";
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::input::InputSimulator::toggle_ime_to(want_active);
+                }).await;
+                match result {
+                    Ok(()) => info!("IME toggled to {}", if want_active { "active" } else { "inactive" }),
+                    Err(e) => warn!("IME toggle error: {}", e),
+                }
+            }
             return;
         }
         ClientMsg::ApprovalResp { r } => {
