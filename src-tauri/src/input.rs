@@ -90,13 +90,36 @@ impl InputSimulator {
             .map_err(|e| anyhow::anyhow!("mouse_up: {}", e))
     }
 
-    pub async fn mouse_scroll(&self, dy: f64) -> Result<()> {
-        let amount = dy.round() as i32;
-        if amount == 0 { return Ok(()); }
+    pub async fn mouse_scroll(&self, dx: f64, dy: f64) -> Result<()> {
+        let ix = dx.round() as i32;
+        let iy = dy.round() as i32;
         let mut guard = self.get_enigo()?;
         let e = guard.as_mut().unwrap();
-        e.scroll(amount, enigo::Axis::Vertical)
-            .map_err(|e| anyhow::anyhow!("scroll: {}", e))
+        if iy != 0 {
+            e.scroll(iy, enigo::Axis::Vertical)
+                .map_err(|e| anyhow::anyhow!("scroll vertical: {}", e))?;
+        }
+        if ix != 0 {
+            e.scroll(ix, enigo::Axis::Horizontal)
+                .map_err(|e| anyhow::anyhow!("scroll horizontal: {}", e))?;
+        }
+        Ok(())
+    }
+
+    pub async fn mouse_zoom(&self, amount: f64) -> Result<()> {
+        // Negate: positive amount (spread fingers = zoom in) → Ctrl+scroll-up (negative)
+        let scroll_amount = -(amount * 10.0).round() as i32;
+        if scroll_amount == 0 { return Ok(()); }
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
+        // Ctrl+Scroll = zoom on most platforms (browsers, Office, etc.)
+        e.key(enigo::Key::Control, enigo::Direction::Press)
+            .map_err(|e| anyhow::anyhow!("zoom ctrl press: {}", e))?;
+        e.scroll(scroll_amount, enigo::Axis::Vertical)
+            .map_err(|e| anyhow::anyhow!("zoom scroll: {}", e))?;
+        e.key(enigo::Key::Control, enigo::Direction::Release)
+            .map_err(|e| anyhow::anyhow!("zoom ctrl release: {}", e))?;
+        Ok(())
     }
 
     /// Send a key combo like "ctrl+c", "Escape", "shift+Tab".
@@ -121,6 +144,29 @@ impl InputSimulator {
                 .map_err(|e| anyhow::anyhow!("mod release: {}", e))?;
         }
 
+        Ok(())
+    }
+
+    /// Press a key (keydown + keyup separately, not Click).
+    /// This allows IMEs to intercept the key events for composition (e.g. Chinese pinyin).
+    pub async fn press_key(&self, key: &str) -> Result<()> {
+        let (modifiers, main_key) = parse_key_string(key);
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
+
+        for m in &modifiers {
+            e.key(*m, Press)
+                .map_err(|e| anyhow::anyhow!("mod press: {}", e))?;
+        }
+        // Use Press then Release instead of Click — IME can intercept each phase
+        e.key(main_key, Press)
+            .map_err(|e| anyhow::anyhow!("key down: {}", e))?;
+        e.key(main_key, Release)
+            .map_err(|e| anyhow::anyhow!("key up: {}", e))?;
+        for m in modifiers.iter().rev() {
+            e.key(*m, Release)
+                .map_err(|e| anyhow::anyhow!("mod release: {}", e))?;
+        }
         Ok(())
     }
 

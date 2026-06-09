@@ -571,12 +571,14 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
         ClientMsg::DoubleClick => input.mouse_double_click().await,
         ClientMsg::MouseDown { b } => input.mouse_down(b).await,
         ClientMsg::MouseUp { b } => input.mouse_up(b).await,
-        ClientMsg::Scroll { y } => input.mouse_scroll(y).await,
+        ClientMsg::Scroll { x, y } => input.mouse_scroll(x, y).await,
+        ClientMsg::PinchZoom { m } => input.mouse_zoom(m).await,
         ClientMsg::TypeText { t } => {
             info!("typing {} chars from {}: {:?}", t.len(), addr, t);
             input.type_text(&t).await
         }
         ClientMsg::Key { k } => input.send_key(&k).await,
+        ClientMsg::KeyPress { k } => input.press_key(&k).await,
         ClientMsg::Backspace { n } => {
             for _ in 0..n {
                 if let Err(e) = input.send_key("Backspace").await {

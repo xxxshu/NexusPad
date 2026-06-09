@@ -55,9 +55,113 @@
       </div>
     </div>
 
-    <div id="touchpad">
-      <div class="hint">触控板</div>
-      <div id="scroll-tag"><svg class="icon" id="scroll-icon"><use xlink:href=""></use></svg><span id="scroll-text"></span></div>
+    <div id="right">
+      <div id="touchpad">
+        <div class="hint">触控板</div>
+        <div id="scroll-tag"><svg class="icon" id="scroll-icon"><use xlink:href=""></use></svg><span id="scroll-text"></span></div>
+      </div>
+
+      <div id="osk" class="hidden">
+        <!-- Letter layer -->
+        <div class="osk-layer" data-layer="alpha">
+          <div class="osk-row">
+            <button class="osk-key" data-k="q">q</button>
+            <button class="osk-key" data-k="w">w</button>
+            <button class="osk-key" data-k="e">e</button>
+            <button class="osk-key" data-k="r">r</button>
+            <button class="osk-key" data-k="t">t</button>
+            <button class="osk-key" data-k="y">y</button>
+            <button class="osk-key" data-k="u">u</button>
+            <button class="osk-key" data-k="i">i</button>
+            <button class="osk-key" data-k="o">o</button>
+            <button class="osk-key" data-k="p">p</button>
+          </div>
+          <div class="osk-row">
+            <div class="osk-spacer-05"></div>
+            <button class="osk-key" data-k="a">a</button>
+            <button class="osk-key" data-k="s">s</button>
+            <button class="osk-key" data-k="d">d</button>
+            <button class="osk-key" data-k="f">f</button>
+            <button class="osk-key" data-k="g">g</button>
+            <button class="osk-key" data-k="h">h</button>
+            <button class="osk-key" data-k="j">j</button>
+            <button class="osk-key" data-k="k">k</button>
+            <button class="osk-key" data-k="l">l</button>
+            <div class="osk-spacer-05"></div>
+          </div>
+          <div class="osk-row">
+            <button class="osk-key osk-mod osk-wide" data-action="shift">⇧</button>
+            <button class="osk-key" data-k="z">z</button>
+            <button class="osk-key" data-k="x">x</button>
+            <button class="osk-key" data-k="c">c</button>
+            <button class="osk-key" data-k="v">v</button>
+            <button class="osk-key" data-k="b">b</button>
+            <button class="osk-key" data-k="n">n</button>
+            <button class="osk-key" data-k="m">m</button>
+            <button class="osk-key osk-mod osk-wide" data-action="backspace">⌫</button>
+          </div>
+          <div class="osk-row">
+            <button class="osk-key osk-mod" data-action="sym">?123</button>
+            <button class="osk-key osk-mod" data-action="lang">中/EN</button>
+            <button class="osk-key osk-space" data-action="space">space</button>
+            <button class="osk-key osk-mod" data-action="comma">,</button>
+            <button class="osk-key osk-mod" data-action="period">.</button>
+            <button class="osk-key osk-mod" data-action="return">⏎</button>
+          </div>
+        </div>
+
+        <!-- Symbol layer -->
+        <div class="osk-layer" data-layer="sym" style="display:none">
+          <div class="osk-row">
+            <button class="osk-key" data-k="1">1</button>
+            <button class="osk-key" data-k="2">2</button>
+            <button class="osk-key" data-k="3">3</button>
+            <button class="osk-key" data-k="4">4</button>
+            <button class="osk-key" data-k="5">5</button>
+            <button class="osk-key" data-k="6">6</button>
+            <button class="osk-key" data-k="7">7</button>
+            <button class="osk-key" data-k="8">8</button>
+            <button class="osk-key" data-k="9">9</button>
+            <button class="osk-key" data-k="0">0</button>
+          </div>
+          <div class="osk-row">
+            <button class="osk-key" data-k="shift+1">!</button>
+            <button class="osk-key" data-k="shift+2">@</button>
+            <button class="osk-key" data-k="shift+3">#</button>
+            <button class="osk-key" data-k="shift+4">$</button>
+            <button class="osk-key" data-k="shift+5">%</button>
+            <button class="osk-key" data-k="shift+6">^</button>
+            <button class="osk-key" data-k="shift+7">&amp;</button>
+            <button class="osk-key" data-k="shift+8">*</button>
+            <button class="osk-key" data-k="shift+9">(</button>
+            <button class="osk-key" data-k="shift+0">)</button>
+          </div>
+          <div class="osk-row">
+            <button class="osk-key" data-k="`">`</button>
+            <button class="osk-key" data-k="-">-</button>
+            <button class="osk-key" data-k="=">=</button>
+            <button class="osk-key" data-k="[">[</button>
+            <button class="osk-key" data-k="]">]</button>
+            <button class="osk-key" data-k=";">;</button>
+            <button class="osk-key" data-k="'">'</button>
+            <button class="osk-key" data-k="shift+`">~</button>
+            <button class="osk-key" data-k="\\">\\</button>
+            <button class="osk-key osk-mod osk-wide" data-action="backspace">⌫</button>
+          </div>
+          <div class="osk-row">
+            <button class="osk-key osk-mod" data-action="sym">ABC</button>
+            <button class="osk-key" data-k=",">,</button>
+            <button class="osk-key" data-k=".">.</button>
+            <button class="osk-key" data-k="/">/</button>
+            <button class="osk-key" data-k="shift+\\">|</button>
+            <button class="osk-key" data-k="shift+;">:</button>
+            <button class="osk-key" data-k="shift+'">"</button>
+            <button class="osk-key" data-k="shift+,">&lt;</button>
+            <button class="osk-key" data-k="shift+.">&gt;</button>
+            <button class="osk-key osk-mod" data-action="return">⏎</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>

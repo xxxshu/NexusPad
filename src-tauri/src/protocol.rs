@@ -15,11 +15,15 @@ pub enum ClientMsg {
     #[serde(rename = "mu")]
     MouseUp { #[serde(default = "default_button")] b: u8 },
     #[serde(rename = "scr")]
-    Scroll { y: f64 },
+    Scroll { #[serde(default)] y: f64, #[serde(default)] x: f64 },
+    #[serde(rename = "pz")]
+    PinchZoom { m: f64 },
     #[serde(rename = "type")]
     TypeText { t: String },
     #[serde(rename = "key")]
     Key { k: String },
+    #[serde(rename = "kp")]
+    KeyPress { k: String },
     #[serde(rename = "bs")]
     Backspace { #[serde(default = "default_one")] n: u32 },
     #[serde(rename = "approval_resp")]
