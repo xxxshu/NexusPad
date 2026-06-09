@@ -133,13 +133,14 @@ pub fn get_local_ip() -> String {
         tracing::info!("get_local_ip via interface scan: {}", ip);
         return ip;
     }
-    tracing::warn!("get_local_ip: interface scan timed out (2s), trying /proc/net/route");
+    tracing::warn!("get_local_ip: interface scan timed out (2s), trying ip-addr fallback");
 
-    // 2) /proc/net/route fallback: find the default-route interface, then use
-    //    SO_BINDTODEVICE + UDP connect to discover that interface's IP.
-    //    This avoids the Netlink socket that getifaddrs() uses (which hangs on
-    //    some ARM64 / Android kernels).
-    if let Some(ip) = proc_route_local_ip() {
+    // 2) `ip -o -4 addr show` — enumerate all interfaces and filter out
+    //    virtual / VPN ones (tun, wg, docker, veth, vgate, rmnet, …).
+    //    On Android devices (common ARM64 targets), getifaddrs() often hangs
+    //    but `ip` works fine via the busybox binary.
+    if let Some(ip) = ip_addr_local_ip() {
+        tracing::info!("get_local_ip via ip-addr: {}", ip);
         return ip;
     }
 
@@ -156,45 +157,82 @@ pub fn get_local_ip() -> String {
     "127.0.0.1".to_string()
 }
 
-/// Read `/proc/net/route` to find the default-route network interface, then
-/// use `ip addr show <iface>` to discover its IPv4 address.
-///
-/// Returns `None` on non-Linux systems or if parsing fails.
-fn proc_route_local_ip() -> Option<String> {
-    // Step 1: find the default-route interface name from /proc/net/route
-    let contents = std::fs::read_to_string("/proc/net/route").ok()?;
-    let iface = contents
-        .lines()
-        .skip(1) // header
-        .find(|line| {
-            let cols: Vec<&str> = line.split_whitespace().collect();
-            // Destination == 0.0.0.0 (hex 00000000) = default route
-            cols.get(1).map_or(false, |d| *d == "00000000")
-        })
-        .and_then(|line| line.split_whitespace().next())?;
-    tracing::debug!("default route interface: {}", iface);
-
-    // Step 2: query that interface's IP via `ip addr show <iface>`
+/// Run `ip -o -4 addr show` and pick the best LAN address, filtering out
+/// virtual / VPN / cellular interfaces that the phone cannot reach.
+fn ip_addr_local_ip() -> Option<String> {
     let output = std::process::Command::new("ip")
-        .args(["addr", "show", iface])
+        .args(["-o", "-4", "addr", "show"])
         .output()
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Interfaces that are virtual / VPN / cellular — not reachable by phone.
+    const VIRTUAL_PREFIXES: &[&str] = &[
+        "lo", "tun", "tap", "wg", "docker", "veth", "br-", "virbr",
+        "vgate", "rmnet", "dummy", "bond", "team", "vboxnet", "vmnet",
+        "ztr", "ham", "ppp",
+    ];
+
+    // Collect non-loopback IPv4 addresses with their interface name.
+    let mut candidates: Vec<(&str, String)> = Vec::new();
     for line in stdout.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("inet ") {
-            if let Some(cidr) = rest.split_whitespace().next() {
-                if let Some(ip) = cidr.split('/').next() {
-                    let ip = ip.to_string();
-                    if !ip.starts_with("127.") {
-                        tracing::info!("get_local_ip via proc_route+ip: {}", ip);
-                        return Some(ip);
-                    }
-                }
-            }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // Format: "2  wlan2    inet 10.14.164.149/24 ..."
+        let iface = cols.get(1)?;
+        let ip = cols.get(3)?.split('/').next()?;
+        if ip.starts_with("127.") {
+            continue;
+        }
+        candidates.push((iface, ip.to_string()));
+    }
+
+    // 1st pass: prefer wlan* / eth* / en* with a private-range address.
+    for (iface, ip) in &candidates {
+        let is_preferred_iface = iface.starts_with("wlan")
+            || iface.starts_with("eth")
+            || iface.starts_with("enp")
+            || iface.starts_with("enx")
+            || iface.starts_with("wlp");
+        if is_preferred_iface
+            && (ip.starts_with("192.168.") || ip.starts_with("10."))
+        {
+            return Some(ip.clone());
         }
     }
-    None
+
+    // 2nd pass: any non-virtual interface with 192.168 / 10.x.
+    for (iface, ip) in &candidates {
+        let is_virtual = VIRTUAL_PREFIXES.iter().any(|p| iface.starts_with(p));
+        if !is_virtual && (ip.starts_with("192.168.") || ip.starts_with("10.")) {
+            return Some(ip.clone());
+        }
+    }
+
+    // 3rd pass: preferred interface, any non-loopback IP.
+    for (iface, ip) in &candidates {
+        let is_preferred_iface = iface.starts_with("wlan")
+            || iface.starts_with("eth")
+            || iface.starts_with("enp")
+            || iface.starts_with("enx")
+            || iface.starts_with("wlp");
+        if is_preferred_iface {
+            return Some(ip.clone());
+        }
+    }
+
+    // 4th pass: any non-virtual interface.
+    for (iface, ip) in &candidates {
+        let is_virtual = VIRTUAL_PREFIXES.iter().any(|p| iface.starts_with(p));
+        if !is_virtual {
+            return Some(ip.clone());
+        }
+    }
+
+    // 5th: first candidate at all.
+    candidates.into_iter().next().map(|(_, ip)| ip)
 }
 
 /// Fast local IP detection via UDP socket connect (no traffic sent).
