@@ -33,6 +33,7 @@ fn embedded_frontend() -> HashMap<&'static str, EmbeddedFile> {
     m.insert("index.html", EmbeddedFile { content: include_bytes!("../../frontend/index.html"), mime: "text/html; charset=utf-8" });
     m.insert("style.css", EmbeddedFile { content: include_bytes!("../../frontend/style.css"), mime: "text/css; charset=utf-8" });
     m.insert("app.js", EmbeddedFile { content: include_bytes!("../../frontend/app.js"), mime: "application/javascript; charset=utf-8" });
+    m.insert("pinyin-dict.js", EmbeddedFile { content: include_bytes!("../../frontend/pinyin-dict.js"), mime: "application/javascript; charset=utf-8" });
     m.insert("iconfont/iconfont.js", EmbeddedFile { content: include_bytes!("../../frontend/iconfont/iconfont.js"), mime: "application/javascript; charset=utf-8" });
     m
 }
@@ -96,6 +97,15 @@ impl ServerState {
 /// 1. Enumerate interfaces via `local_ip_address` (2-second timeout to guard
 ///    against `getifaddrs()` stalling on ARM64 / Android / containers).
 ///    Prefers 192.168.x.x / 10.x.x.x — IPs the phone can actually reach.
+/// Detect if running in a proot/chroot environment
+pub fn is_proot() -> bool {
+    // Check common proot indicators
+    std::env::var("TMOE_PROOT").is_ok()
+        || std::env::var("PROOT").is_ok()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || std::path::Path::new("/.proot").exists()
+}
+
 /// 2. Read `/proc/net/route` to find the default-route interface, then bind a
 ///    UDP socket to that interface (`SO_BINDTODEVICE`) to get its IP.
 /// 3. UDP connect trick (fast, but may return VPN/virtual adapter IPs).
@@ -428,7 +438,8 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
         // No active controller → take control immediately
         *state.active_ws.lock().await = Some((addr, tx.clone()));
         *state.connected_device.lock().await = Some(device_name.clone());
-        let msg = serde_json::to_string(&ServerMsg::CtrlOk).unwrap();
+        let proot = if is_proot() { Some(true) } else { None };
+        let msg = serde_json::to_string(&ServerMsg::CtrlOk { proot }).unwrap();
         let _ = tx.send(Message::Text(msg.into()));
         state.send_event(format!("✅ {} ({}) 已连接", device_name, addr_str));
         info!("{} is now controller", addr_str);
@@ -487,7 +498,8 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
                 *state.pending_ws.lock().await = None;
                 *state.approval_tx.lock().await = None;
 
-                let msg = serde_json::to_string(&ServerMsg::CtrlOk).unwrap();
+                let proot = if is_proot() { Some(true) } else { None };
+                let msg = serde_json::to_string(&ServerMsg::CtrlOk { proot }).unwrap();
                 let _ = tx.send(Message::Text(msg.into()));
                 state.send_event(format!("✅ {} ({}) 已接管控制", device_name, addr_str));
                 info!("{} approved, now controller", addr_str);
@@ -584,6 +596,28 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
                 if let Err(e) = input.send_key("Backspace").await {
                     warn!("Backspace error: {}", e);
                     break;
+                }
+            }
+            return;
+        }
+        ClientMsg::ToggleIME { mode } => {
+            // On Linux: use fcitx-remote to activate/deactivate IME
+            #[cfg(target_os = "linux")]
+            {
+                let cmd = if mode == "zh" {
+                    "fcitx-remote -o"
+                } else {
+                    "fcitx-remote -c"
+                };
+                let cmd = cmd.to_string();
+                let result = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new("sh").args(["-c", &cmd])
+                        .status().map_err(|e| anyhow::anyhow!("fcitx-remote: {}", e))
+                }).await;
+                match result {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => warn!("IME toggle error: {}", e),
+                    Err(e) => warn!("IME toggle spawn error: {}", e),
                 }
             }
             return;

@@ -62,6 +62,11 @@
       </div>
 
       <div id="osk" class="hidden">
+        <!-- Pinyin candidate bar -->
+        <div id="pinyin-bar" class="hidden">
+          <span id="pinyin-input"></span>
+          <div id="pinyin-candidates"></div>
+        </div>
         <!-- Letter layer -->
         <div class="osk-layer" data-layer="alpha">
           <div class="osk-row">
@@ -167,7 +172,7 @@
 </div>
 
 <div id="sent">已发送</div>
-
+<!-- Hidden textarea for proot Chinese IME composition -->
 <textarea id="txt" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
 
 <!-- Approval overlay -->
@@ -193,6 +198,7 @@
   </div>
 </div>
 
+<script src="pinyin-dict.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

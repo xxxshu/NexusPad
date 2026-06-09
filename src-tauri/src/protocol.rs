@@ -26,6 +26,8 @@ pub enum ClientMsg {
     KeyPress { k: String },
     #[serde(rename = "bs")]
     Backspace { #[serde(default = "default_one")] n: u32 },
+    #[serde(rename = "ime")]
+    ToggleIME { #[serde(default)] mode: String },
     #[serde(rename = "approval_resp")]
     ApprovalResp { r: String },
     #[serde(rename = "auth")]
@@ -40,7 +42,7 @@ fn default_one() -> u32 { 1 }
 #[serde(tag = "a")]
 pub enum ServerMsg {
     #[serde(rename = "ctrl_ok")]
-    CtrlOk,
+    CtrlOk { #[serde(skip_serializing_if = "Option::is_none")] proot: Option<bool> },
     #[serde(rename = "wait")]
     Wait { #[serde(skip_serializing_if = "Option::is_none")] reason: Option<String> },
     #[serde(rename = "approval_req")]

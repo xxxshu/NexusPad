@@ -1,6 +1,6 @@
 // ─── Connection ──────────────────────────────────────
 const $ = id => document.getElementById(id);
-let ws, reconn, hasControl = false, hasEverControlled = false;
+let ws, reconn, hasControl = false, hasEverControlled = false, isProot = false;
 const st = $('status');
 
 function connect() {
@@ -27,6 +27,7 @@ function connect() {
     let d; try { d = JSON.parse(e.data) } catch { return };
     if (d.a === 'ctrl_ok') {
       hasControl = true; hasEverControlled = true;
+      isProot = !!d.proot;
       st.textContent = '控制中'; st.className = 'ok';
       $('auth-overlay').classList.remove('show');
     } else if (d.a === 'auth_required') {
@@ -98,35 +99,173 @@ const kbIcon = $('kb-icon');
 const osk = $('osk');
 const oskLayers = {};
 osk.querySelectorAll('.osk-layer').forEach(el => { oskLayers[el.dataset.layer] = el; });
-const ta = $('txt'); // hidden textarea for IME composition
+const pinyinBar = $('pinyin-bar');
+const pinyinInput = $('pinyin-input');
+const pinyinCandidates = $('pinyin-candidates');
+const ta = $('txt'); // hidden textarea (unused in pinyin mode, kept for compatibility)
 
-let oskShift = false;    // sticky shift
-let oskLayer = 'alpha';  // 'alpha' | 'sym'
-let oskLang = 'en';      // 'en' | 'zh'
-let composing = false;   // IME composition active
+let oskShift = false;
+let oskLayer = 'alpha';
+let oskLang = 'en';
+// Pinyin state
+let pyBuf = '';
+let pyCandidates = [];
+let pyPage = 0;
+const PY_PAGE_SIZE = 8;
 
-// IME composition events (for Chinese pinyin on controller)
-ta.addEventListener('compositionstart', () => { composing = true });
-ta.addEventListener('compositionend', () => {
-  composing = false;
-  const text = ta.value;
-  if (text.length > 0) {
-    // Commit composed text to controlled device
-    S({ a: 'type', t: text });
-    flash();
+// ─── Pinyin engine ─────────────────────────────────
+const PY_KEYS = typeof PINYIN_MAP !== 'undefined'
+  ? Object.keys(PINYIN_MAP).sort((a, b) => b.length - a.length)
+  : [];
+
+function parsePinyin(str) {
+  const result = [];
+  let s = str.toLowerCase();
+  while (s.length > 0) {
+    let found = false;
+    for (const k of PY_KEYS) {
+      if (s.startsWith(k)) {
+        result.push(k);
+        s = s.slice(k.length);
+        found = true;
+        break;
+      }
+    }
+    if (!found) { result.push(s); s = ''; }
   }
-  ta.value = '';
-});
-ta.addEventListener('input', () => {
-  if (composing) return; // wait for compositionend
-  // Non-composed input (e.g. English letters if IME not active)
-  const text = ta.value;
-  if (text.length > 0) {
-    S({ a: 'type', t: text });
-    flash();
+  return result;
+}
+
+function updatePinyinUI() {
+  if (!pyBuf || oskLang !== 'zh') {
+    pinyinBar.classList.add('hidden');
+    pyCandidates = [];
+    return;
   }
-  ta.value = '';
-});
+  pinyinBar.classList.remove('hidden');
+  pinyinInput.textContent = pyBuf;
+
+  if (typeof PINYIN_MAP === 'undefined') { pyCandidates = []; renderCandidates(); return; }
+
+  const full = pyBuf.toLowerCase();
+  let cands = [];
+
+  // 1. Try full pinyin as word key
+  if (PINYIN_MAP[full]) {
+    const entry = PINYIN_MAP[full];
+    // Extract: multi-char words first, then single chars
+    let i = 0;
+    while (i < entry.length) {
+      const cp = entry.codePointAt(i);
+      const ch = String.fromCodePoint(cp);
+      // Check if next char is also CJK → this is a multi-char word
+      if (i + 1 < entry.length) {
+        const nextCp = entry.codePointAt(i + 1);
+        if (nextCp >= 0x4E00 && nextCp <= 0x9FFF) {
+          // Find the end of this word (consecutive CJK chars)
+          let j = i + 1;
+          while (j < entry.length) {
+            const ncp = entry.codePointAt(j);
+            if (ncp < 0x4E00 || ncp > 0x9FFF) break;
+            j++;
+          }
+          cands.push(entry.slice(i, j));
+          i = j;
+          continue;
+        }
+      }
+      cands.push(ch);
+      i += ch.length;
+    }
+  }
+
+  // 2. Also try partial matches (multi-syllable combinations from the end)
+  if (cands.length === 0) {
+    const sylls = parsePinyin(full);
+    for (let start = sylls.length - 1; start >= 0; start--) {
+      const key = sylls.slice(start).join('');
+      if (PINYIN_MAP[key]) {
+        const entry = PINYIN_MAP[key];
+        let i = 0;
+        while (i < entry.length) {
+          const cp = entry.codePointAt(i);
+          const ch = String.fromCodePoint(cp);
+          if (i + 1 < entry.length) {
+            const nextCp = entry.codePointAt(i + 1);
+            if (nextCp >= 0x4E00 && nextCp <= 0x9FFF) {
+              let j = i + 1;
+              while (j < entry.length) {
+                const ncp = entry.codePointAt(j);
+                if (ncp < 0x4E00 || ncp > 0x9FFF) break;
+                j++;
+              }
+              cands.push(entry.slice(i, j));
+              i = j;
+              continue;
+            }
+          }
+          cands.push(ch);
+          i += ch.length;
+        }
+        break;
+      }
+    }
+  }
+
+  pyCandidates = cands;
+  pyPage = 0;
+  renderCandidates();
+}
+
+function renderCandidates() {
+  pinyinCandidates.innerHTML = '';
+  const start = pyPage * PY_PAGE_SIZE;
+  const page = pyCandidates.slice(start, start + PY_PAGE_SIZE);
+  for (const ch of page) {
+    const btn = document.createElement('span');
+    btn.className = 'pinyin-cand';
+    btn.textContent = ch;
+    btn.addEventListener('click', () => selectCandidate(ch));
+    pinyinCandidates.appendChild(btn);
+  }
+  if (pyCandidates.length > start + PY_PAGE_SIZE) {
+    const more = document.createElement('span');
+    more.className = 'pinyin-cand';
+    more.textContent = '…';
+    more.addEventListener('click', () => { pyPage++; renderCandidates(); });
+    pinyinCandidates.appendChild(more);
+  }
+}
+
+function selectCandidate(ch) {
+  S({ a: 'type', t: ch });
+  flash();
+  // For a word like "你好" (2 chars), its pinyin is the full buffer
+  // For a single char, remove only the first syllable
+  const sylls = parsePinyin(pyBuf);
+  if (ch.length > 1) {
+    // Multi-char word: matched pinyin = all syllables that map to this word
+    // We used the full buffer key, so clear it all
+    pyBuf = '';
+  } else {
+    // Single char: remove first syllable
+    pyBuf = pyBuf.slice(sylls[0]?.length || 1);
+  }
+  if (pyBuf) updatePinyinUI();
+  else { pyCandidates = []; pinyinBar.classList.add('hidden'); }
+}
+
+function commitPinyin() {
+  if (pyCandidates.length > 0) {
+    selectCandidate(pyCandidates[0]);
+  } else if (pyBuf) {
+    S({ a: 'type', t: pyBuf });
+    flash();
+    pyBuf = '';
+    pyCandidates = [];
+    pinyinBar.classList.add('hidden');
+  }
+}
 
 function toggleKb() {
   if (osk.classList.contains('hidden')) {
@@ -137,7 +276,7 @@ function toggleKb() {
     osk.classList.add('hidden');
     kbBtn.classList.remove('active');
     kbIcon.querySelector('use').setAttribute('xlink:href', '#icon-danchujianpan');
-    ta.blur();
+    pyBuf = ''; pyCandidates = []; pinyinBar.classList.add('hidden');
   }
 }
 
@@ -160,8 +299,7 @@ function updateShiftUI() {
 function updateAlphaLabels() {
   if (oskLayer !== 'alpha') return;
   oskLayers.alpha.querySelectorAll('.osk-key[data-k]').forEach(b => {
-    const k = b.dataset.k;
-    b.textContent = oskShift ? k.toUpperCase() : k;
+    b.textContent = oskShift ? b.dataset.k.toUpperCase() : b.dataset.k;
   });
 }
 
@@ -171,15 +309,8 @@ osk.addEventListener('pointerdown', e => {
   e.preventDefault();
   e.stopPropagation();
   btn.classList.add('pressed');
-
-  const k = btn.dataset.k;
-  const action = btn.dataset.action;
-
-  if (action) {
-    handleOskAction(action);
-  } else if (k) {
-    handleOskKey(k);
-  }
+  if (btn.dataset.action) handleOskAction(btn.dataset.action);
+  else if (btn.dataset.k) handleOskKey(btn.dataset.k);
 }, { passive: false });
 
 osk.addEventListener('pointerup', e => {
@@ -193,23 +324,16 @@ osk.addEventListener('pointerleave', e => {
 }, true);
 
 function handleOskKey(k) {
-  if (oskLang === 'zh') {
-    // Chinese mode: type into textarea, let browser IME compose pinyin
-    if (!document.activeElement || document.activeElement !== ta) {
-      ta.focus({ preventScroll: true });
-    }
-    // Type the character into textarea for IME composition
-    const ch = oskShift ? k.toUpperCase() : k;
+  if (oskLang === 'zh' && isProot) {
+    // proot Chinese mode: frontend pinyin dictionary
+    pyBuf += k.toLowerCase();
     if (oskShift) { oskShift = false; updateShiftUI(); }
-    // Use insertText to trigger proper composition events
-    ta.setRangeText(ch, ta.selectionStart, ta.selectionEnd, 'end');
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    updatePinyinUI();
   } else {
-    // English mode: send key events directly to controlled device
+    // Normal mode (or English mode): send key event to controlled machine
     if (oskShift) {
       S({ a: 'key', k: 'shift+' + k });
-      oskShift = false;
-      updateShiftUI();
+      oskShift = false; updateShiftUI();
     } else {
       S({ a: 'key', k: k });
     }
@@ -220,73 +344,52 @@ function handleOskKey(k) {
 function handleOskAction(action) {
   switch (action) {
     case 'shift':
-      oskShift = !oskShift;
-      updateShiftUI();
-      break;
+      oskShift = !oskShift; updateShiftUI(); break;
     case 'backspace':
-      if (oskLang === 'zh' && ta.value.length > 0 && composing) {
-        // During composition: let IME handle backspace
-        ta.setRangeText('', ta.selectionStart - 1, ta.selectionEnd, 'end');
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      if (oskLang === 'zh' && isProot && pyBuf.length > 0) {
+        pyBuf = pyBuf.slice(0, -1);
+        updatePinyinUI();
       } else {
-        S({ a: 'bs', n: 1 });
-        flash();
+        S({ a: 'bs', n: 1 }); flash();
       }
       break;
     case 'return':
-      S({ a: 'key', k: 'Return' });
-      flash();
+      if (oskLang === 'zh' && isProot && pyBuf) commitPinyin();
+      S({ a: 'key', k: 'Return' }); flash();
       break;
     case 'space':
-      if (oskLang === 'zh') {
-        // Space confirms IME candidate on controlled device
-        // First commit any local composition
-        if (composing) {
-          composing = false;
-          const text = ta.value;
-          if (text.length > 0) { S({ a: 'type', t: text }); }
-          ta.value = '';
-        }
-        S({ a: 'key', k: 'Space' });
-      } else {
-        S({ a: 'key', k: 'Space' });
-      }
-      flash();
+      if (oskLang === 'zh' && isProot && pyBuf) { commitPinyin(); }
+      else { S({ a: 'key', k: 'Space' }); flash(); }
       break;
     case 'tab':
-      S({ a: 'key', k: 'Tab' });
-      flash();
+      if (oskLang === 'zh' && isProot && pyBuf) commitPinyin();
+      S({ a: 'key', k: 'Tab' }); flash();
       break;
     case 'comma':
+      if (oskLang === 'zh' && isProot && pyBuf) commitPinyin();
       S({ a: 'key', k: oskShift ? 'shift+,' : ',' });
       if (oskShift) { oskShift = false; updateShiftUI(); }
-      flash();
-      break;
+      flash(); break;
     case 'period':
+      if (oskLang === 'zh' && isProot && pyBuf) commitPinyin();
       S({ a: 'key', k: oskShift ? 'shift+.' : '.' });
       if (oskShift) { oskShift = false; updateShiftUI(); }
-      flash();
-      break;
+      flash(); break;
     case 'lang':
       oskLang = oskLang === 'en' ? 'zh' : 'en';
-      const langBtn = osk.querySelector('.osk-key[data-action="lang"]');
-      if (langBtn) langBtn.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
-      if (oskLang === 'zh') {
-        // Focus textarea to activate IME
-        ta.value = '';
-        ta.focus({ preventScroll: true });
+      const b = osk.querySelector('.osk-key[data-action="lang"]');
+      if (b) b.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
+      if (isProot) {
+        pyBuf = ''; pyCandidates = []; pinyinBar.classList.add('hidden');
       } else {
-        ta.blur();
-        ta.value = '';
+        S({ a: 'ime', mode: oskLang }); flash();
       }
       break;
     case 'sym':
-      oskSwitchLayer(oskLayer === 'alpha' ? 'sym' : 'alpha');
-      break;
+      oskSwitchLayer(oskLayer === 'alpha' ? 'sym' : 'alpha'); break;
   }
 }
 
-// Prevent touch events from reaching the touchpad
 osk.addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
 osk.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
 osk.addEventListener('touchend', e => e.stopPropagation(), { passive: true });
@@ -468,14 +571,14 @@ tp.addEventListener('touchmove', e => {
     }
   }
 
-  // ── Single-finger mouse movement ──
-  if (e.touches.length === 1 && gesture === 'none') {
+  // ── Single-finger mouse movement / drag ──
+  if (e.touches.length === 1 && (gesture === 'none' || gesture === 'drag')) {
     const t = e.touches[0], f = fingers[t.identifier];
     if (!f) return;
     // Calculate delta BEFORE updating position
     const dx = t.clientX - f.x, dy = t.clientY - f.y;
     if (Math.abs(t.clientX - f.sx) > TH || Math.abs(t.clientY - f.sy) > TH) {
-      moved = true; if (!pressing) clearTimeout(pressTimer);
+      moved = true; if (!pressing && gesture === 'none') clearTimeout(pressTimer);
     }
     accDx += dx * SENS; accDy += dy * SENS; scheduleMv();
     f.x = t.clientX; f.y = t.clientY;

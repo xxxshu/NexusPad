@@ -170,7 +170,24 @@ impl InputSimulator {
         Ok(())
     }
 
-    /// Type text — uses xdotool type for ASCII, clipboard paste for CJK.
+    /// Send a key combo using xdotool (Linux only).
+    /// Converts frontend key names to xdotool keysym format.
+    /// e.g. "Space" → "space", "," → "comma", "shift+!" → "shift+1"
+    #[cfg(target_os = "linux")]
+    pub async fn send_combo_xdotool(&self, key: &str) -> Result<()> {
+        let xdotool_key = to_xdotool_key(key);
+        tokio::task::spawn_blocking(move || {
+            std::process::Command::new("xdotool")
+                .args(["key", &xdotool_key])
+                .status()
+                .map_err(|e| anyhow::anyhow!("xdotool key: {}", e))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking: {}", e))??;
+        Ok(())
+    }
+
+    /// Type text — uses xdotool type for ASCII, enigo text() for CJK.
     pub async fn type_text(&self, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
@@ -191,11 +208,10 @@ impl InputSimulator {
     async fn type_line(&self, text: &str) -> Result<()> {
         let is_ascii_only = text.is_ascii();
 
-        // On Linux: prefer xdotool for better compatibility
+        // On Linux: prefer xdotool for ASCII, enigo text() for CJK
         #[cfg(target_os = "linux")]
         {
             if is_ascii_only {
-                // ASCII text: xdotool type is most reliable
                 let text = text.to_string();
                 let ok = tokio::task::spawn_blocking(move || {
                     std::process::Command::new("xdotool")
@@ -209,14 +225,9 @@ impl InputSimulator {
                     return Ok(());
                 }
             }
-            // CJK / non-ASCII: clipboard paste via xdotool
-            if self.clipboard_paste(text).await.is_ok() {
-                return Ok(());
-            }
-            // xdotool not available: fall through to enigo
         }
 
-        // enigo fallback: direct text input
+        // For CJK / all non-Linux: use enigo text() directly
         let mut guard = self.get_enigo()?;
         let e = guard.as_mut().unwrap();
         e.text(text)
@@ -368,5 +379,97 @@ fn map_key_name(name: &str) -> enigo::Key {
             tracing::warn!("Unknown key name: '{}', trying as Unicode", name);
             enigo::Key::Unicode(name.chars().next().unwrap_or(' '))
         }
+    }
+}
+
+/// Shifted symbol → base key for xdotool.
+/// e.g. '!' → Some("1"), '@' → Some("2"), '$' → Some("4")
+fn shifted_to_base(ch: char) -> Option<&'static str> {
+    match ch {
+        '!' => Some("1"), '@' => Some("2"), '#' => Some("3"),
+        '$' => Some("4"), '%' => Some("5"), '^' => Some("6"),
+        '&' => Some("7"), '*' => Some("8"), '(' => Some("9"),
+        ')' => Some("0"), '_' => Some("minus"), '+' => Some("equal"),
+        '{' => Some("bracketleft"), '}' => Some("bracketright"),
+        '|' => Some("backslash"), ':' => Some("semicolon"),
+        '"' => Some("quote"), '<' => Some("comma"), '>' => Some("period"),
+        '?' => Some("slash"), '~' => Some("grave"),
+        _ => None,
+    }
+}
+
+/// Convert a frontend key string to xdotool keysym format.
+/// Examples:
+///   "Space"     → "space"
+///   ","         → "comma"
+///   "."         → "period"
+///   "shift+!"  → "shift+1"
+///   "ctrl+space"→ "ctrl+space"
+///   "Return"    → "Return"
+fn to_xdotool_key(key: &str) -> String {
+    // Check if this is a modifier combo
+    if let Some(plus_pos) = key.rfind('+') {
+        let prefix = &key[..plus_pos];
+        let base = &key[plus_pos + 1..];
+        if !prefix.is_empty() && (prefix.contains("ctrl") || prefix.contains("shift")
+            || prefix.contains("alt") || prefix.contains("meta"))
+        {
+            // Shifted symbol → base key (e.g. "shift+!" → "shift+1")
+            if prefix.contains("shift") {
+                if let Some(ch) = base.chars().next() {
+                    if base.chars().count() == 1 {
+                        if let Some(base_key) = shifted_to_base(ch) {
+                            // Rebuild with original prefix
+                            let mut result = prefix.to_string();
+                            result.push('+');
+                            result.push_str(base_key);
+                            return result;
+                        }
+                    }
+                }
+            }
+            // Recursively convert the base key part
+            let converted_base = to_xdotool_key(base);
+            return format!("{}+{}", prefix, converted_base);
+        }
+    }
+
+    // Single key — map to xdotool keysym name
+    match key {
+        "Space" => "space".to_string(),
+        "Return" | "Enter" => "Return".to_string(),
+        "Tab" => "Tab".to_string(),
+        "BackSpace" | "Backspace" => "BackSpace".to_string(),
+        "Escape" | "Esc" => "Escape".to_string(),
+        "Delete" | "Del" => "Delete".to_string(),
+        "Up" => "Up".to_string(),
+        "Down" => "Down".to_string(),
+        "Left" => "Left".to_string(),
+        "Right" => "Right".to_string(),
+        "Home" => "Home".to_string(),
+        "End" => "End".to_string(),
+        "Page_Up" | "PageUp" => "Page_Up".to_string(),
+        "Page_Down" | "PageDown" => "Page_Down".to_string(),
+        // Single character
+        _ if key.chars().count() == 1 => {
+            let ch = key.chars().next().unwrap();
+            match ch {
+                ',' => "comma".to_string(),
+                '.' => "period".to_string(),
+                '/' => "slash".to_string(),
+                ';' => "semicolon".to_string(),
+                '\'' => "apostrophe".to_string(),
+                '[' => "bracketleft".to_string(),
+                ']' => "bracketright".to_string(),
+                '-' => "minus".to_string(),
+                '=' => "equal".to_string(),
+                '`' => "grave".to_string(),
+                '\\' => "backslash".to_string(),
+                ' ' => "space".to_string(),
+                // Letters and digits are valid keysym names as-is
+                _ => ch.to_string(),
+            }
+        }
+        _ => key.to_string(),
     }
 }

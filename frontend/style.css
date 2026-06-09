@@ -76,12 +76,26 @@ html,body{height:100%;width:100%;background:#0f1117;color:#c9d1d9;
 @keyframes rf{0%{opacity:.5;transform:translate(-50%,-50%) scale(.3)}
   100%{opacity:0;transform:translate(-50%,-50%) scale(1.6)}}
 
-/* ─── Hidden textarea (IME composition) ────────────── */
+/* ─── Pinyin Candidate Bar ────────────────────────── */
+#pinyin-bar{display:flex;align-items:center;gap:6px;
+  padding:4px 6px;min-height:36px;overflow-x:auto;white-space:nowrap;
+  background:#161b22;border-bottom:1px solid #30363d}
+#pinyin-bar.hidden{display:none}
+#pinyin-input{color:#58a6ff;font-size:14px;font-weight:600;
+  padding:2px 6px;flex-shrink:0}
+#pinyin-candidates{display:flex;gap:4px;overflow-x:auto;flex:1;
+  -webkit-overflow-scrolling:touch}
+.pinyin-cand{padding:4px 10px;font-size:16px;color:#c9d1d9;
+  background:#21262d;border:1px solid #30363d;border-radius:4px;
+  cursor:pointer;flex-shrink:0;touch-action:manipulation}
+.pinyin-cand:active{background:#388bfd;color:#fff}
+.pinyin-cand:first-child{border-color:#58a6ff}
+
+/* ─── Hidden textarea (proot Chinese IME) ─────────── */
 #txt{position:fixed;bottom:0;left:0;width:1px;height:1px;
   font-size:16px;z-index:-1;border:none;resize:none;
   background:transparent;color:transparent;caret-color:transparent;
   opacity:0.001;overflow:hidden;padding:0;outline:none}
-#txt:focus{caret-color:transparent}
 
 /* ─── On-Screen Keyboard ──────────────────────────── */
 #osk{background:#0d1117;border-top:1px solid var(--border);
