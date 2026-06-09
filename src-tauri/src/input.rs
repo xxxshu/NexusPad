@@ -124,7 +124,7 @@ impl InputSimulator {
         Ok(())
     }
 
-    /// Type text using clipboard paste (works for CJK and all Unicode).
+    /// Type text — uses xdotool type for ASCII, clipboard paste for CJK.
     pub async fn type_text(&self, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
@@ -132,18 +132,7 @@ impl InputSimulator {
 
         for (i, line) in text.split('\n').enumerate() {
             if !line.is_empty() {
-                // Try clipboard paste first (reliable for CJK)
-                match self.clipboard_paste(line).await {
-                    Ok(()) => info!("clipboard_paste OK for {:?}", line),
-                    Err(e) => {
-                        info!("clipboard_paste failed ({}), trying enigo text", e);
-                        let mut guard = self.get_enigo()?;
-                        let e = guard.as_mut().unwrap();
-                        e.text(line)
-                            .map_err(|e| anyhow::anyhow!("text: {}", e))?;
-                        info!("enigo text OK for {:?}", line);
-                    }
-                }
+                self.type_line(line).await?;
             }
             if i < text.split('\n').count() - 1 {
                 self.send_key("Return").await?;
@@ -152,7 +141,44 @@ impl InputSimulator {
         Ok(())
     }
 
-    /// Copy text to clipboard then Ctrl+V paste.
+    /// Type a single line of text.
+    async fn type_line(&self, text: &str) -> Result<()> {
+        let is_ascii_only = text.is_ascii();
+
+        // On Linux: prefer xdotool for better compatibility
+        #[cfg(target_os = "linux")]
+        {
+            if is_ascii_only {
+                // ASCII text: xdotool type is most reliable
+                let text = text.to_string();
+                let ok = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new("xdotool")
+                        .args(["type", "--clearmodifiers", &text])
+                        .status()
+                        .map_or(false, |s| s.success())
+                })
+                .await
+                .unwrap_or(false);
+                if ok {
+                    return Ok(());
+                }
+            }
+            // CJK / non-ASCII: clipboard paste via xdotool
+            if self.clipboard_paste(text).await.is_ok() {
+                return Ok(());
+            }
+            // xdotool not available: fall through to enigo
+        }
+
+        // enigo fallback: direct text input
+        let mut guard = self.get_enigo()?;
+        let e = guard.as_mut().unwrap();
+        e.text(text)
+            .map_err(|e| anyhow::anyhow!("text: {}", e))?;
+        Ok(())
+    }
+
+    /// Copy text to clipboard then simulate Ctrl+V.
     async fn clipboard_paste(&self, text: &str) -> Result<()> {
         {
             let mut ctx = arboard::Clipboard::new()
@@ -160,35 +186,36 @@ impl InputSimulator {
             ctx.set_text(text.to_string())
                 .map_err(|e| anyhow::anyhow!("clipboard set: {}", e))?;
         }
-
-        // Small delay to ensure clipboard is populated
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // On Linux, use xdotool for Ctrl+V — more reliable than enigo
-        // modifier combos. Falls back to enigo if xdotool is not available.
         #[cfg(target_os = "linux")]
         {
-            let status = tokio::task::spawn_blocking(|| {
+            let ok = tokio::task::spawn_blocking(|| {
                 std::process::Command::new("xdotool")
                     .args(["key", "ctrl+v"])
                     .status()
+                    .map_or(false, |s| s.success())
             })
             .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking: {}", e))?;
-
-            if status.map_or(false, |s| s.success()) {
+            .unwrap_or(false);
+            if ok {
                 return Ok(());
             }
-            // xdotool not available or failed — fall through to enigo
+            return Err(anyhow::anyhow!("xdotool not available"));
         }
 
-        // Fallback: enigo Ctrl+V
-        let mut guard = self.get_enigo()?;
-        let e = guard.as_mut().unwrap();
-        e.key(enigo::Key::Control, Press).map_err(|e| anyhow::anyhow!("ctrl press: {}", e))?;
-        e.key(enigo::Key::Unicode('v'), Click).map_err(|e| anyhow::anyhow!("v click: {}", e))?;
-        e.key(enigo::Key::Control, Release).map_err(|e| anyhow::anyhow!("ctrl release: {}", e))?;
-        Ok(())
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut guard = self.get_enigo()?;
+            let e = guard.as_mut().unwrap();
+            e.key(enigo::Key::Control, Press)
+                .map_err(|e| anyhow::anyhow!("ctrl press: {}", e))?;
+            e.key(enigo::Key::Unicode('v'), Click)
+                .map_err(|e| anyhow::anyhow!("v click: {}", e))?;
+            e.key(enigo::Key::Control, Release)
+                .map_err(|e| anyhow::anyhow!("ctrl release: {}", e))?;
+            Ok(())
+        }
     }
 
     pub async fn close(&mut self) {
