@@ -133,12 +133,16 @@ impl InputSimulator {
         for (i, line) in text.split('\n').enumerate() {
             if !line.is_empty() {
                 // Try clipboard paste first (reliable for CJK)
-                if self.clipboard_paste(line).await.is_err() {
-                    // Fallback: enigo text input
-                    let mut guard = self.get_enigo()?;
-                    let e = guard.as_mut().unwrap();
-                    e.text(line)
-                        .map_err(|e| anyhow::anyhow!("text: {}", e))?;
+                match self.clipboard_paste(line).await {
+                    Ok(()) => info!("clipboard_paste OK for {:?}", line),
+                    Err(e) => {
+                        info!("clipboard_paste failed ({}), trying enigo text", e);
+                        let mut guard = self.get_enigo()?;
+                        let e = guard.as_mut().unwrap();
+                        e.text(line)
+                            .map_err(|e| anyhow::anyhow!("text: {}", e))?;
+                        info!("enigo text OK for {:?}", line);
+                    }
                 }
             }
             if i < text.split('\n').count() - 1 {
@@ -158,9 +162,27 @@ impl InputSimulator {
         }
 
         // Small delay to ensure clipboard is populated
-        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Ctrl+V
+        // On Linux, use xdotool for Ctrl+V — more reliable than enigo
+        // modifier combos. Falls back to enigo if xdotool is not available.
+        #[cfg(target_os = "linux")]
+        {
+            let status = tokio::task::spawn_blocking(|| {
+                std::process::Command::new("xdotool")
+                    .args(["key", "ctrl+v"])
+                    .status()
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking: {}", e))?;
+
+            if status.map_or(false, |s| s.success()) {
+                return Ok(());
+            }
+            // xdotool not available or failed — fall through to enigo
+        }
+
+        // Fallback: enigo Ctrl+V
         let mut guard = self.get_enigo()?;
         let e = guard.as_mut().unwrap();
         e.key(enigo::Key::Control, Press).map_err(|e| anyhow::anyhow!("ctrl press: {}", e))?;
