@@ -93,21 +93,13 @@ impl ServerState {
 
 /// Get LAN IP address (prefer WiFi/Ethernet over virtual adapters).
 ///
-/// Uses a UDP "connect" trick first (fast, never blocks), then falls back to
-/// `local_ip_address` with a 2-second timeout to avoid hanging on systems
-/// where `getifaddrs()` stalls (e.g. some ARM64 / Android / container envs).
+/// 1. Enumerate interfaces via `local_ip_address` (2-second timeout to guard
+///    against `getifaddrs()` stalling on ARM64 / Android / containers).
+///    Prefers 192.168.x.x / 10.x.x.x — IPs the phone can actually reach.
+/// 2. UDP connect trick (fast, but may return VPN/virtual adapter IPs).
+/// 3. "127.0.0.1" as last resort.
 pub fn get_local_ip() -> String {
-    // Fast path: UDP connect to a public IP — doesn't send any traffic,
-    // just lets the OS pick the source address for the route.
-    if let Some(ip) = udp_local_ip() {
-        if !ip.starts_with("127.") {
-            return ip;
-        }
-    }
-
-    // Slow path with timeout: enumerate interfaces via local_ip_address crate.
-    // Some systems (ARM64 / Android / containers) can hang in getifaddrs(),
-    // so we cap the whole scan at 2 seconds using a helper thread + channel.
+    // 1) Interface scan with timeout — finds real LAN addresses.
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = std::thread::Builder::new()
         .name("local-ip-scan".into())
@@ -121,6 +113,7 @@ pub fn get_local_ip() -> String {
                         if s.starts_with("127.") || s.starts_with("169.254.") {
                             continue;
                         }
+                        // Prefer addresses the phone is most likely to reach
                         if s.starts_with("192.168.") || s.starts_with("10.") {
                             return Some(s);
                         }
@@ -138,7 +131,15 @@ pub fn get_local_ip() -> String {
         return ip;
     }
 
-    // Last resort
+    // 2) UDP connect trick — fast, never blocks, but may pick a VPN / virtual
+    //    adapter address that the phone cannot reach.
+    if let Some(ip) = udp_local_ip() {
+        if !ip.starts_with("127.") {
+            return ip;
+        }
+    }
+
+    // 3) Last resort
     "127.0.0.1".to_string()
 }
 
