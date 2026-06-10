@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let ws, reconn, hasControl = false, hasEverControlled = false, isProot = false;
 let imeStatus = 'en'; // Server-pushed IME state: 'en' or 'zh'
+let imeJustToggled = 0; // Timestamp of last toggle — guard against stale server response
 const st = $('status');
 
 // ─── Haptic feedback ────────────────────────────────
@@ -113,6 +114,11 @@ function connect() {
       // Server pushes IME status (on connect via ime_init, after toggle/refresh via ime_state)
       const newStatus = (d.status || 'EN').toLowerCase();
       console.log('[IME] received', d.a, 'status:', d.status, '→ oskLang:', newStatus, 'was:', oskLang);
+      // Guard: ignore server status right after a toggle (server may read from wrong window)
+      if (imeJustToggled && Date.now() - imeJustToggled < 500) {
+        console.log('[IME] ignoring — just toggled');
+        return;
+      }
       imeStatus = newStatus;
       oskLang = newStatus;
       const btn = osk.querySelector('.osk-key[data-action="lang"]');
@@ -479,7 +485,8 @@ function handleOskAction(action) {
 }
 
 /// Short press on lang key: request physical IME toggle from server.
-/// Server will push back the new state via ime_init.
+/// Per 开发计划.md §5: frontend flips UI state in sync with the toggle request.
+/// Server only simulates the physical key — we don't rely on server-side IME detection.
 function handleLangShortPress() {
   if (isProot) {
     // In proot mode, toggle locally (no system IME available)
@@ -488,10 +495,13 @@ function handleLangShortPress() {
     if (b) b.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
     pyBuf = ''; pyCandidates = []; pinyinBar.classList.add('hidden');
   } else {
-    // Non-proot: request server to simulate physical IME toggle key
-    console.log('[IME] sending ime_toggle, current oskLang:', oskLang);
+    // Non-proot: flip UI immediately, then request server to simulate physical key
+    oskLang = oskLang === 'en' ? 'zh' : 'en';
+    const b = osk.querySelector('.osk-key[data-action="lang"]');
+    if (b) b.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
+    imeStatus = oskLang; // Keep imeStatus in sync
+    imeJustToggled = Date.now();
     S({ a: 'ime_toggle' }); flash();
-    // UI update will happen when server pushes back ime_init
   }
 }
 

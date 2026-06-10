@@ -15,6 +15,8 @@ type HWND = isize;
 #[link(name = "user32")]
 extern "system" {
     fn GetForegroundWindow() -> HWND;
+    fn GetWindow(hWnd: HWND, uCmd: u32) -> HWND;
+    fn IsWindowVisible(hWnd: HWND) -> i32;
     fn keybd_event(bVk: u8, bScan: u8, dwFlags: u32, dwExtraInfo: usize);
     fn SendInput(cInputs: u32, pInputs: *const INPUT, cbSize: i32) -> u32;
     fn MapVirtualKeyW(uCode: u32, uMapType: u32) -> u32;
@@ -33,6 +35,7 @@ const INPUT_KEYBOARD: u32 = 1;
 const KEYEVENTF_KEYUP: u32 = 0x0002;
 const KEYEVENTF_EXTENDEDKEY: u32 = 0x0001;
 const IME_CMODE_NATIVE: u32 = 0x0001;
+const GW_HWNDNEXT: u32 = 2;
 
 // Extended keys that need KEYEVENTF_EXTENDEDKEY flag
 const EXTENDED_KEYS: &[u8] = &[0x25, 0x26, 0x27, 0x28, // arrow keys
@@ -55,6 +58,7 @@ struct KEYBDINPUT {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 union INPUT_UNION {
     ki: std::mem::ManuallyDrop<KEYBDINPUT>,
     _pad: [u8; 24],
@@ -166,44 +170,58 @@ fn send_key_combo(keys: &str) {
     info!("SendInput: simulated key combo '{}'", keys);
 }
 
+/// Check if a window has a Chinese IME active.
+/// Returns Some("ZH") or Some("EN") if the window has an IME context, None otherwise.
+fn check_window_ime(hwnd: HWND) -> Option<String> {
+    if hwnd == 0 { return None; }
+    unsafe {
+        let himc = ImmGetContext(hwnd);
+        if himc == 0 { return None; }
+        let is_open = ImmGetOpenStatus(himc);
+        if is_open == 0 {
+            ImmReleaseContext(hwnd, himc);
+            return Some("EN".to_string());
+        }
+        let mut conversion: u32 = 0;
+        let mut _sentence: u32 = 0;
+        let ok = ImmGetConversionStatus(himc, &mut conversion, &mut _sentence);
+        ImmReleaseContext(hwnd, himc);
+        if ok != 0 && (conversion & IME_CMODE_NATIVE) != 0 {
+            Some("ZH".to_string())
+        } else {
+            Some("EN".to_string())
+        }
+    }
+}
+
 pub struct WindowsHandler;
 
 impl PlatformHandler for WindowsHandler {
     fn get_ime_status(&self) -> String {
-        unsafe {
-            let hwnd = GetForegroundWindow();
-            if hwnd == 0 {
-                warn!("GetForegroundWindow returned null, defaulting EN");
-                return "EN".to_string();
-            }
-            let himc = ImmGetContext(hwnd);
-            if himc == 0 {
-                warn!("ImmGetContext returned null, defaulting EN");
-                return "EN".to_string();
-            }
-
-            // Check if IME is open first
-            let is_open = ImmGetOpenStatus(himc);
-            if is_open == 0 {
-                ImmReleaseContext(hwnd, himc);
-                info!("Windows IME status: closed (EN)");
-                return "EN".to_string();
-            }
-
-            // IME is open — check conversion mode for native (Chinese) mode
-            let mut conversion: u32 = 0;
-            let mut _sentence: u32 = 0;
-            let ok = ImmGetConversionStatus(himc, &mut conversion, &mut _sentence);
-            ImmReleaseContext(hwnd, himc);
-
-            if ok != 0 && (conversion & IME_CMODE_NATIVE) != 0 {
-                info!("Windows IME status: native mode (ZH), conversion=0x{:X}", conversion);
-                "ZH".to_string()
-            } else {
-                info!("Windows IME status: non-native mode (EN), conversion=0x{:X}", conversion);
-                "EN".to_string()
-            }
+        // 1. Try the foreground window first
+        let fg = unsafe { GetForegroundWindow() };
+        if let Some(status) = check_window_ime(fg) {
+            info!("IME status from foreground window: {}", status);
+            return status;
         }
+
+        // 2. Walk the Z-order to find a visible window with an IME context
+        //    (the foreground window might be a console/terminal without IME)
+        let mut hwnd = unsafe { GetWindow(fg, GW_HWNDNEXT) };
+        let mut checked = 0;
+        while hwnd != 0 && checked < 10 {
+            if unsafe { IsWindowVisible(hwnd) } != 0 {
+                if let Some(status) = check_window_ime(hwnd) {
+                    info!("IME status from Z-order window #{}: {}", checked, status);
+                    return status;
+                }
+            }
+            hwnd = unsafe { GetWindow(hwnd, GW_HWNDNEXT) };
+            checked += 1;
+        }
+
+        warn!("No window with IME context found, defaulting EN");
+        "EN".to_string()
     }
 
     fn toggle_ime(&self, custom_keys: Option<&str>) {
