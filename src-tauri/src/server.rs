@@ -627,8 +627,8 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
             let need_toggle = (want_zh && current != "ZH") || (!want_zh && current != "EN");
             if need_toggle {
                 state.platform.toggle_ime(state.ime_toggle_key.as_deref());
-                // Small delay to let the OS process the toggle
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                // Wait for the OS/IME to process the simulated key event
+                tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
             }
             // Push updated status
             state.push_ime_status().await;
@@ -639,8 +639,9 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
             info!("PressImeToggle from {}", addr);
             drop(input);
             state.platform.toggle_ime(state.ime_toggle_key.as_deref());
-            // Small delay to let the OS process the toggle
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            // Wait for the OS/IME to process the simulated key event
+            // 50ms is too fast for some IMEs — they haven't updated their state yet
+            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
             // Push updated status
             state.push_ime_status().await;
             return;

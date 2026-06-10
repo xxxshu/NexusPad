@@ -112,6 +112,7 @@ function connect() {
     } else if (d.a === 'ime_init' || d.a === 'ime_state') {
       // Server pushes IME status (on connect via ime_init, after toggle/refresh via ime_state)
       const newStatus = (d.status || 'EN').toLowerCase();
+      console.log('[IME] received', d.a, 'status:', d.status, '→ oskLang:', newStatus, 'was:', oskLang);
       imeStatus = newStatus;
       oskLang = newStatus;
       const btn = osk.querySelector('.osk-key[data-action="lang"]');
@@ -326,6 +327,10 @@ function toggleKb() {
     osk.classList.remove('hidden');
     kbBtn.classList.add('active');
     kbIcon.querySelector('use').setAttribute('xlink:href', '#icon-shouqijianpan');
+    // Sync IME button UI with latest server state when keyboard opens
+    oskLang = imeStatus;
+    const btn = osk.querySelector('.osk-key[data-action="lang"]');
+    if (btn) btn.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
   } else {
     osk.classList.add('hidden');
     kbBtn.classList.remove('active');
@@ -484,6 +489,7 @@ function handleLangShortPress() {
     pyBuf = ''; pyCandidates = []; pinyinBar.classList.add('hidden');
   } else {
     // Non-proot: request server to simulate physical IME toggle key
+    console.log('[IME] sending ime_toggle, current oskLang:', oskLang);
     S({ a: 'ime_toggle' }); flash();
     // UI update will happen when server pushes back ime_init
   }
