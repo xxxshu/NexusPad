@@ -519,7 +519,45 @@ const tp = $('touchpad');
 const scrollTag = $('scroll-tag');
 const scrollIcon = $('scroll-icon');
 const scrollText = $('scroll-text');
-const TH = 8, SENS = 5;
+
+// ─── Pointer algorithms (research report §1.4, §2.2, §3.1, §3.5) ──
+const TH = 8;  // movement detection threshold (px)
+
+// Delta smoothing: EMA on raw deltas (§2.2 — exponential moving average)
+const DELTA_SMOOTH = 0.5;  // 0.5 = more smoothing, smaller per-frame deltas for extreme smoothness
+
+// Acceleration: higher base for smooth sub-pixel movement (§3.1)
+// At slow speed (1px/frame): 0.75*4 = 3px/frame → smooth continuous
+// At fast speed (10px/frame): 0.75*4 = 30px/frame → fast screen traversal
+const ACCEL_BASE    = 3.0;  // base sensitivity (server handles sub-pixel precision)
+const ACCEL_RAMP    = 1.0;  // additional multiplier at high speed
+const ACCEL_SPEED_K = 0.2;  // px/ms — speed where acceleration kicks in
+const ACCEL_CAP     = 8.0;  // max total multiplier
+
+// Inertia scrolling (§1.5, §3.4) — exponential decay, time-normalized
+const INERTIA_RATE    = 0.975;  // per-frame decay at 60fps
+const INERTIA_STOP_TH = 0.15;  // |velocity| below this → stop
+
+// Scroll nonlinear curve (§3.4 libinput-inspired)
+const SCROLL_LINEAR_TH = 5;  // px — below this, use linear (no truncation loss)
+
+// Two-finger tap (§5.2, §6.1) — right-click
+const TAP_MOVE_TH  = 15;  // max per-finger movement (px)
+const TAP_TIME_TH  = 300; // max duration (ms)
+
+// Pinch threshold (§3.3) — distance change ratio to disambiguate from scroll
+const PINCH_TH = 0.08;  // 8% distance change → pinch candidate
+
+// ─── Algorithm state ───────────────────────────────
+let prevDx = 0, prevDy = 0;  // EMA-smoothed deltas
+let lastMoveT = 0;
+let smoothedSpeed = 0;  // EMA velocity for acceleration
+
+// Sub-pixel accumulators (§3.5 — float truncation, retain fractional remainder)
+let mvAccX = 0, mvAccY = 0;
+
+// Inertia scrolling state
+let inertiaVelocity = 0, inertiaActive = false, inertiaRAF = null;
 
 // Finger tracking: identifier → { x, y, sx, sy }
 let fingers = {};
@@ -532,32 +570,72 @@ let pressing = false, pressTimer = null, touchActive = false;
 // Two-finger detection
 let detectStart = 0;
 // Scroll accumulators
-let scrFrac = 0;
+let scrFrac = 0, scrFracX = 0, scrFracY = 0;
 // Pinch state
 let pinchD0 = 0, pinchAcc = 0;
-// Batch movement
-let accDx = 0, accDy = 0, accScrX = 0, accScrY = 0, mvDirty = false, mvScheduled = false;
+// Scroll batch (separate from movement — movement sends immediately)
+let accScrX = 0, accScrY = 0, scrDirty = false, scrRAF = false;
+// Two-finger tap tracking
+let twoFingerMovedDist = 0;
 
-// Nonlinear scroll curve (libinput-inspired)
+// Acceleration: smooth adaptive curve (§3.1)
+// Slow → ACCEL_BASE (precise), fast → ACCEL_BASE + ACCEL_RAMP (powerful)
+function calcAccel(speed) {
+  // speed is in px/ms from EMA
+  const ramp = speed > ACCEL_SPEED_K
+    ? ACCEL_RAMP * (1 - Math.exp(-((speed - ACCEL_SPEED_K) / ACCEL_SPEED_K)))
+    : 0;
+  return Math.min(ACCEL_BASE + ramp, ACCEL_CAP);
+}
+
+// Scroll nonlinear curve (§3.4 libinput-inspired)
+// Linear for slow movement (prevents jerky stops), nonlinear boost for fast
+const SCROLL_SCALE = 0.5;  // overall scroll sensitivity (0.5 = half speed)
 function scrollCurve(delta) {
   const abs = Math.abs(delta);
   const sign = delta < 0 ? -1 : 1;
+  if (abs <= SCROLL_LINEAR_TH) return delta * SCROLL_SCALE; // linear at low speed
   const curved = abs * (0.3 + 0.012 * abs);
-  return sign * Math.min(curved, abs * 3);
+  return sign * Math.min(curved, abs * 3) * SCROLL_SCALE;
 }
 
-// Batch flush (requestAnimationFrame)
-function flushMv() {
-  mvScheduled = false;
-  if (mvDirty) {
-    if (accDx || accDy) { S({ a: 'mv', x: accDx, y: accDy }); accDx = accDy = 0; }
+// Scroll batch flush (rAF-driven, separate from mouse movement)
+function flushScr() {
+  scrRAF = false;
+  if (scrDirty) {
     if (accScrX || accScrY) { S({ a: 'scr', x: accScrX, y: accScrY }); accScrX = accScrY = 0; }
-    mvDirty = false;
+    scrDirty = false;
   }
 }
-function scheduleMv() {
-  mvDirty = true;
-  if (!mvScheduled) { mvScheduled = true; requestAnimationFrame(flushMv); }
+function scheduleScr() {
+  scrDirty = true;
+  if (!scrRAF) { scrRAF = true; requestAnimationFrame(flushScr); }
+}
+
+// Inertia scrolling (§1.5, §3.4) — exponential decay, time-normalized
+function startInertia(velocity) {
+  if (Math.abs(velocity) < INERTIA_STOP_TH) return;
+  stopInertia();
+  inertiaVelocity = velocity;
+  inertiaActive = true;
+  let lastT = performance.now();
+  function tick(now) {
+    if (!inertiaActive) return;
+    const dt = Math.min((now - lastT) / 1000, 0.05);
+    lastT = now;
+    inertiaVelocity *= Math.pow(INERTIA_RATE, dt * 60); // time-normalized (§1.5)
+    if (Math.abs(inertiaVelocity) < INERTIA_STOP_TH) { stopInertia(); return; }
+    const scrDelta = inertiaVelocity * dt * 60;
+    scrFrac += scrDelta;
+    const toSend = Math.trunc(scrFrac);
+    if (toSend !== 0) { accScrY += toSend; scrFrac -= toSend; scheduleScr(); }
+    inertiaRAF = requestAnimationFrame(tick);
+  }
+  inertiaRAF = requestAnimationFrame(tick);
+}
+function stopInertia() {
+  inertiaActive = false; inertiaVelocity = 0;
+  if (inertiaRAF) { cancelAnimationFrame(inertiaRAF); inertiaRAF = null; }
 }
 
 // Gesture state indicator tags
@@ -569,8 +647,7 @@ function showTag(iconId, text) {
 function hideTag() { scrollTag.style.display = 'none'; }
 
 // ─── Gesture disambiguation ────────────────────────
-const DETECT_MS = 250;   // detection window (ms)
-const PINCH_TH  = 0.08;  // 8% distance change → pinch
+const DETECT_MS = 250;
 
 function detectGesture() {
   const ids = Object.keys(fingers);
@@ -578,25 +655,32 @@ function detectGesture() {
   const f0 = fingers[ids[0]], f1 = fingers[ids[1]];
   const dCurrent = Math.hypot(f0.x - f1.x, f0.y - f1.y);
   const dInitial = Math.hypot(f0.sx - f1.sx, f0.sy - f1.sy);
-  if (dInitial > 0 && Math.abs(dCurrent - dInitial) / dInitial > PINCH_TH) {
+  const distChange = dInitial > 0 ? Math.abs(dCurrent - dInitial) / dInitial : 0;
+  // Centroid movement (scroll indicator)
+  const centroidDx = (f0.x + f1.x) / 2 - (f0.sx + f1.sx) / 2;
+  const centroidDy = (f0.y + f1.y) / 2 - (f0.sy + f1.sy) / 2;
+  const centroidDist = Math.hypot(centroidDx, centroidDy);
+  // Pinch: distance change is significant AND dominates over centroid movement (§3.3)
+  // This prevents scrolling from triggering pinch when fingers naturally change spacing
+  const pinchDominant = distChange > PINCH_TH && (centroidDist < 5 || distChange * dInitial > centroidDist * 0.5);
+  if (pinchDominant) {
     gesture = 'pinch';
     pinchD0 = dCurrent;
     pinchAcc = 0;
     showTag('icon-a-075_shuangzhigundong', '缩放');
     return;
   }
+  // Scroll: both fingers moving same direction (§3.3)
   const dot = (f0.x - f0.sx) * (f1.x - f1.sx) + (f0.y - f0.sy) * (f1.y - f1.sy);
-  const centroidDx = (f0.x + f1.x) / 2 - (f0.sx + f1.sx) / 2;
-  const centroidDy = (f0.y + f1.y) / 2 - (f0.sy + f1.sy) / 2;
   if (dot > 0 && (Math.abs(centroidDx) > TH || Math.abs(centroidDy) > TH)) {
     gesture = 'scroll';
-    scrFrac = 0; scrollTickDist = 0; lastScrollTickT = 0;
+    scrFrac = 0; scrFracX = 0; scrFracY = 0; scrollTickDist = 0; lastScrollTickT = 0;
     showTag('icon-a-075_shuangzhigundong', '滚动');
     return;
   }
   if (Date.now() - detectStart > DETECT_MS) {
     gesture = 'scroll';
-    scrFrac = 0;
+    scrFrac = 0; scrFracX = 0; scrFracY = 0;
     showTag('icon-a-075_shuangzhigundong', '滚动');
   }
 }
@@ -610,6 +694,9 @@ tp.addEventListener('touchstart', e => {
 
   if (e.touches.length === 1 && gesture === 'none') {
     moved = false; tStart = now; pressing = false; touchActive = true;
+    lastMoveT = now; smoothedSpeed = 0; prevDx = 0; prevDy = 0;
+    mvAccX = 0; mvAccY = 0;
+    stopInertia();
     clearTimeout(pressTimer);
     pressTimer = setTimeout(() => {
       if (!moved && gesture === 'none' && touchActive) {
@@ -622,11 +709,12 @@ tp.addEventListener('touchstart', e => {
 
   if (e.touches.length === 2) {
     clearTimeout(pressTimer);
+    stopInertia();
     if (gesture === 'none' || gesture === 'drag') {
       if (pressing) { pressing = false; S({ a: 'mu', b: 1 }); }
       gesture = 'detecting';
       detectStart = now;
-      // Reset start positions for detection baseline
+      twoFingerMovedDist = 0;
       const ids = Object.keys(fingers);
       for (const id of ids) { fingers[id].sx = fingers[id].x; fingers[id].sy = fingers[id].y; }
       showTag('icon-a-075_shuangzhigundong', '检测中...');
@@ -636,6 +724,7 @@ tp.addEventListener('touchstart', e => {
 
 tp.addEventListener('touchmove', e => {
   e.preventDefault();
+  const now = Date.now();
 
   // ── Two-finger gestures ──
   if (e.touches.length >= 2) {
@@ -644,19 +733,21 @@ tp.addEventListener('touchmove', e => {
     const f0 = fingers[ids[0]], f1 = fingers[ids[1]];
 
     if (gesture === 'detecting') {
-      // Update positions BEFORE detection
       for (const t of e.changedTouches) { const f = fingers[t.identifier]; if (f) { f.x = t.clientX; f.y = t.clientY; } }
+      // Track max per-finger movement for tap detection
+      const d0 = Math.hypot(f0.x - f0.sx, f0.y - f0.sy);
+      const d1 = Math.hypot(f1.x - f1.sx, f1.y - f1.sy);
+      twoFingerMovedDist = Math.max(d0, d1);
       detectGesture();
       return;
     }
 
     if (gesture === 'pinch') {
-      // Use current touch positions directly (don't rely on stored positions for pinch)
       const t0 = e.touches[0], t1 = e.touches[1];
       const d = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
       if (pinchD0 > 0) {
         pinchAcc += Math.log(d / pinchD0);
-        if (Math.abs(pinchAcc) > 0.05) {
+        if (Math.abs(pinchAcc) > 0.15) {
           S({ a: 'pz', m: pinchAcc });
           flash();
           pinchD0 = d;
@@ -668,25 +759,30 @@ tp.addEventListener('touchmove', e => {
     }
 
     if (gesture === 'scroll') {
-      // Calculate delta BEFORE updating positions
       const dx = (f0.x + f1.x) / 2 - (f0.sx + f1.sx) / 2;
       const dy = -((f0.y + f1.y) / 2 - (f0.sy + f1.sy) / 2); // negate for natural scroll
       scrollTickStep(Math.hypot(dx, dy));
       const cdx = scrollCurve(dx);
       const cdy = scrollCurve(dy);
-      if (Math.abs(cdx) > Math.abs(cdy)) {
-        scrFrac += cdx;
-        const toSend = Math.trunc(scrFrac);
-        if (toSend !== 0) { accScrX += toSend; scrFrac -= toSend; scheduleMv(); }
-      } else {
-        scrFrac += cdy;
-        const toSend = Math.trunc(scrFrac);
-        if (toSend !== 0) { accScrY += toSend; scrFrac -= toSend; scheduleMv(); }
+      // Track scroll velocity for inertia (§1.5)
+      const scrDt = Math.max(now - (f0._lastScrT || now), 1);
+      f0._lastScrT = now;
+      const instantScrV = cdy / scrDt * 16;
+      const VEL_ALPHA = 0.4;
+      inertiaVelocity = VEL_ALPHA * instantScrV + (1 - VEL_ALPHA) * (inertiaVelocity || 0);
+      // Float accumulation for sub-pixel smooth scroll (prevents truncation dead zone)
+      scrFracX += cdx;
+      scrFracY += cdy;
+      const ix = Math.trunc(scrFracX);
+      const iy = Math.trunc(scrFracY);
+      if (ix !== 0 || iy !== 0) {
+        accScrX += ix; accScrY += iy;
+        scrFracX -= ix; scrFracY -= iy; // retain fractional remainder
+        scheduleScr();
       }
       // Update start positions for continuous delta
       f0.sx = f0.x; f0.sy = f0.y;
       f1.sx = f1.x; f1.sy = f1.y;
-      // Update current positions
       for (const t of e.changedTouches) { const f = fingers[t.identifier]; if (f) { f.x = t.clientX; f.y = t.clientY; } }
       return;
     }
@@ -696,12 +792,39 @@ tp.addEventListener('touchmove', e => {
   if (e.touches.length === 1 && (gesture === 'none' || gesture === 'drag')) {
     const t = e.touches[0], f = fingers[t.identifier];
     if (!f) return;
-    // Calculate delta BEFORE updating position
-    const dx = t.clientX - f.x, dy = t.clientY - f.y;
+    const rawDx = t.clientX - f.x, rawDy = t.clientY - f.y;
     if (Math.abs(t.clientX - f.sx) > TH || Math.abs(t.clientY - f.sy) > TH) {
       moved = true; if (!pressing && gesture === 'none') clearTimeout(pressTimer);
     }
-    accDx += dx * SENS; accDy += dy * SENS; scheduleMv();
+
+    // ── Pointer algorithm pipeline ──
+    const now2 = Date.now();
+    // 1. EMA delta smoothing (§2.2) — smooth noise while preserving intent
+    const sdx = DELTA_SMOOTH * rawDx + (1 - DELTA_SMOOTH) * prevDx;
+    const sdy = DELTA_SMOOTH * rawDy + (1 - DELTA_SMOOTH) * prevDy;
+    prevDx = sdx; prevDy = sdy;
+
+    // 2. EMA velocity for acceleration (§2.2)
+    const dt = Math.max(now2 - lastMoveT, 1);
+    const instantSpeed = Math.hypot(Math.abs(sdx), Math.abs(sdy)) / dt; // px/ms
+    const SPEED_EMA = 0.3;
+    smoothedSpeed = SPEED_EMA * instantSpeed + (1 - SPEED_EMA) * smoothedSpeed;
+    lastMoveT = now2;
+
+    // 3. Adaptive acceleration (§3.1)
+    const multiplier = calcAccel(smoothedSpeed);
+
+    // 4. Sub-pixel accumulation (§3.5) — float accumulator, send integer part
+    mvAccX += sdx * multiplier;
+    mvAccY += sdy * multiplier;
+    const ix = Math.trunc(mvAccX);
+    const iy = Math.trunc(mvAccY);
+    if (ix !== 0 || iy !== 0) {
+      mvAccX -= ix; // retain fractional remainder
+      mvAccY -= iy;
+      S({ a: 'mv', x: ix, y: iy }); // send immediately (no rAF batching)
+    }
+
     f.x = t.clientX; f.y = t.clientY;
   }
 }, { passive: false });
@@ -709,7 +832,6 @@ tp.addEventListener('touchmove', e => {
 tp.addEventListener('touchend', e => {
   e.preventDefault();
   const now = Date.now();
-  // Remove ended fingers, clear timer
   for (const t of e.changedTouches) delete fingers[t.identifier];
   clearTimeout(pressTimer);
 
@@ -718,18 +840,24 @@ tp.addEventListener('touchend', e => {
     touchActive = false;
     if (pressing) {
       pressing = false; S({ a: 'mu', b: 1 }); hapticDragEnd(); hideTag();
-      gesture = 'none'; scrFrac = 0; pinchD0 = 0; pinchAcc = 0;
+      gesture = 'none'; scrFrac = 0; scrFracX = 0; scrFracY = 0; pinchD0 = 0; pinchAcc = 0;
       return;
     }
-    if (gesture === 'detecting' && now - detectStart < 250) {
+    // Two-finger tap → right click (§5.2, §6.1)
+    if (gesture === 'detecting' && now - detectStart < TAP_TIME_TH && twoFingerMovedDist < TAP_MOVE_TH) {
       S({ a: 'clk', b: 3 });
       const t = e.changedTouches[0];
       if (t) rip(t.clientX, t.clientY, '#58a6ff');
-      hideTag(); gesture = 'none'; scrFrac = 0; pinchD0 = 0; pinchAcc = 0;
+      hideTag(); gesture = 'none'; scrFrac = 0; scrFracX = 0; scrFracY = 0; pinchD0 = 0; pinchAcc = 0;
       return;
     }
-    if (gesture === 'scroll' || gesture === 'pinch') {
-      hideTag(); gesture = 'none'; scrFrac = 0; pinchD0 = 0; pinchAcc = 0;
+    if (gesture === 'scroll') {
+      startInertia(inertiaVelocity); // inertia scrolling (§1.5)
+      hideTag(); gesture = 'none'; scrFrac = 0; scrFracX = 0; scrFracY = 0; pinchD0 = 0; pinchAcc = 0;
+      return;
+    }
+    if (gesture === 'pinch') {
+      hideTag(); gesture = 'none'; scrFrac = 0; scrFracX = 0; scrFracY = 0; pinchD0 = 0; pinchAcc = 0;
       return;
     }
     if (gesture === 'none' && !moved && now - tStart < 250) {
@@ -740,19 +868,23 @@ tp.addEventListener('touchend', e => {
         else { S({ a: 'clk', b: 1 }); hapticTap(); rip(t.clientX, t.clientY, '#3fb950'); lastTapT = now; lastTapX = t.clientX; lastTapY = t.clientY; }
       }
     }
-    gesture = 'none'; scrFrac = 0; pinchD0 = 0; pinchAcc = 0; hideTag();
+    gesture = 'none'; scrFrac = 0; scrFracX = 0; scrFracY = 0; pinchD0 = 0; pinchAcc = 0; hideTag();
     return;
   }
 
   // ── Some fingers still down ──
-  if (e.touches.length < 2 && gesture !== 'none' && gesture !== 'drag') {
-    // Update remaining finger position so next touchmove delta is correct
-    if (e.touches.length === 1) {
-      const rt = e.touches[0];
-      const rf = fingers[rt.identifier];
-      if (rf) { rf.x = rt.clientX; rf.y = rt.clientY; }
+  if (e.touches.length < 2) {
+    // If we were in 'detecting' (two-finger), keep the state —
+    // the second finger might lift imminently (staggered lift for tap).
+    // Only reset if gesture was already resolved (scroll/pinch/drag).
+    if (gesture !== 'detecting' && gesture !== 'none' && gesture !== 'drag') {
+      if (e.touches.length === 1) {
+        const rt = e.touches[0];
+        const rf = fingers[rt.identifier];
+        if (rf) { rf.x = rt.clientX; rf.y = rt.clientY; }
+      }
+      hideTag(); gesture = 'none'; scrFrac = 0; scrFracX = 0; scrFracY = 0; pinchD0 = 0; pinchAcc = 0;
     }
-    hideTag(); gesture = 'none'; scrFrac = 0; pinchD0 = 0; pinchAcc = 0;
   }
 }, { passive: false });
 

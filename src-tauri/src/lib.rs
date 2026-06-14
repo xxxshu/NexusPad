@@ -253,6 +253,45 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Get whether autostart on boot is enabled
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> bool {
+    use tauri_plugin_autostart::AutoLaunchManager;
+    if let Some(manager) = app.try_state::<AutoLaunchManager>() {
+        manager.is_enabled().unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+/// Toggle autostart on boot
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::AutoLaunchManager;
+    let manager = app.try_state::<AutoLaunchManager>()
+        .ok_or("Autostart plugin not initialized")?;
+    if enable {
+        manager.enable().map_err(|e| format!("Failed to enable autostart: {}", e))?;
+    } else {
+        manager.disable().map_err(|e| format!("Failed to disable autostart: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Get minimize-to-tray setting
+#[tauri::command]
+fn get_minimize_to_tray(state: State<'_, Mutex<AppState>>) -> bool {
+    state.blocking_lock().config.minimize_to_tray
+}
+
+/// Set minimize-to-tray setting
+#[tauri::command]
+fn set_minimize_to_tray(state: State<'_, Mutex<AppState>>, enable: bool) -> Result<(), String> {
+    let mut s = state.blocking_lock();
+    s.config.minimize_to_tray = enable;
+    config::save_config(&s.config_path, &s.config)
+}
+
 // ─── Tauri App Setup ──────────────────────────────────────
 
 pub fn run() {
@@ -325,10 +364,20 @@ pub fn run() {
             // ── Close-to-tray: intercept window close ────
             let window = app.get_webview_window("main").unwrap();
             let window_clone = window.clone();
+            let app_handle = app.handle().clone();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window_clone.hide();
+                    // Check minimize_to_tray setting
+                    let minimize = if let Some(state) = app_handle.try_state::<tokio::sync::Mutex<AppState>>() {
+                        state.blocking_lock().config.minimize_to_tray
+                    } else {
+                        true // default: minimize to tray
+                    };
+                    if minimize {
+                        api.prevent_close();
+                        let _ = window_clone.hide();
+                    }
+                    // If minimize_to_tray is false, allow close (app exits)
                 }
             });
 
@@ -342,6 +391,10 @@ pub fn run() {
             save_ime_config,
             check_port,
             app_version,
+            get_autostart,
+            set_autostart,
+            get_minimize_to_tray,
+            set_minimize_to_tray,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

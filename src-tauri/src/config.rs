@@ -3,12 +3,27 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 /// Application configuration — persisted as JSON.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Custom IME toggle key combo (e.g. "shift", "ctrl+space", "capslock").
     /// `None` means use the platform default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ime_toggle_key: Option<String>,
+    /// Whether to minimize to system tray when closing the window.
+    /// Default: true.
+    #[serde(default = "default_true")]
+    pub minimize_to_tray: bool,
+}
+
+fn default_true() -> bool { true }
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            ime_toggle_key: None,
+            minimize_to_tray: true,
+        }
+    }
 }
 
 /// Load config from a JSON file. Returns default if the file doesn't exist or is invalid.

@@ -111,6 +111,9 @@ function GeneralTab() {
     invoke("get_autostart").then((enabled: any) => {
       setAutoStart(!!enabled);
     }).catch(() => {});
+    invoke("get_minimize_to_tray").then((enabled: any) => {
+      setMinimizeToTray(!!enabled);
+    }).catch(() => {});
   }, []);
 
   // Port change handler
@@ -251,7 +254,9 @@ function GeneralTab() {
         </Row>
         <div style={{ height: 1, background: "rgba(0,98,171,0.08)" }} />
         <Row label="关闭时最小化到托盘" hint="关闭按钮不退出程序">
-          <Toggle checked={minimizeToTray} onChange={setMinimizeToTray} />
+          <Toggle checked={minimizeToTray} onChange={async (v) => {
+            try { await invoke("set_minimize_to_tray", { enable: v }); setMinimizeToTray(v); } catch {}
+          }} />
         </Row>
       </SectionCard>
     </div>

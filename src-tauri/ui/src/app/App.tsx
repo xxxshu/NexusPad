@@ -300,7 +300,7 @@ export default function App() {
             pointerEvents: isSettings ? "none" : "auto",
           }}
         >
-          <PinButtonModule ref={pinRef} />
+          <PinButtonModule ref={pinRef} onStopped={() => { setConnected(false); setDeviceName(undefined); }} />
           <StatusIndicator connected={connected} deviceName={deviceName} />
         </div>
 
@@ -331,7 +331,7 @@ export default function App() {
         }}
       >
         <span style={{ color: "#c5dff0", fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-          NexusPad v0.2.0
+          NexusPad v0.5.0
         </span>
       </div>
     </div>

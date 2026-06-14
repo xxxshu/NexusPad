@@ -11,6 +11,8 @@ use tracing::info;
 /// Cross-platform input simulator using enigo (works on Windows, macOS, Linux).
 pub struct InputSimulator {
     enigo: Mutex<Option<Enigo>>,
+    /// Sub-pixel accumulators for smooth cursor movement (§3.5)
+    acc: Mutex<(f64, f64)>,
 }
 
 impl InputSimulator {
@@ -23,6 +25,7 @@ impl InputSimulator {
         info!("Enigo input simulator initialized");
         Ok(Self {
             enigo: Mutex::new(Some(enigo)),
+            acc: Mutex::new((0.0, 0.0)),
         })
     }
 
@@ -30,6 +33,7 @@ impl InputSimulator {
     pub fn new_lazy() -> Self {
         Self {
             enigo: Mutex::new(None),
+            acc: Mutex::new((0.0, 0.0)),
         }
     }
 
@@ -51,9 +55,19 @@ impl InputSimulator {
     }
 
     pub async fn mouse_move(&self, dx: f64, dy: f64) -> Result<()> {
+        // Sub-pixel accumulation (§3.5): retain fractional remainder for smooth movement
+        let mut acc = self.acc.lock().unwrap();
+        acc.0 += dx;
+        acc.1 += dy;
+        let ix = acc.0 as i32; // truncates toward zero
+        let iy = acc.1 as i32;
+        if ix == 0 && iy == 0 { return Ok(()); }
+        acc.0 -= ix as f64; // retain fractional remainder
+        acc.1 -= iy as f64;
+        drop(acc);
         let mut guard = self.get_enigo()?;
         let e = guard.as_mut().unwrap();
-        e.move_mouse(dx as i32, dy as i32, Rel)
+        e.move_mouse(ix, iy, Rel)
             .map_err(|e| anyhow::anyhow!("mouse_move: {}", e))
     }
 

@@ -12,9 +12,10 @@ export interface PinModuleHandle {
 
 interface PinModuleProps {
   onStateChange?: (state: "idle" | "qr" | "pin" | "done") => void;
+  onStopped?: () => void;
 }
 
-export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(function PinButtonModule({ onStateChange }, ref) {
+export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(function PinButtonModule({ onStateChange, onStopped }, ref) {
   const boxRef = useRef<HTMLDivElement>(null);
   const hintRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<"idle" | "toQR" | "qr" | "toPIN" | "pin" | "toDone" | "done">("idle");
@@ -378,6 +379,7 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
         }
       } else if (s === "done") {
         try { await invoke("stop_server_cmd"); } catch {}
+        onStopped?.();
         startReset();
       }
     }
