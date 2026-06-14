@@ -2,26 +2,399 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, viewport-fit=cover">
-<title>Remote Touchpad</title>
-<script src="iconfont/iconfont.js"></script>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no,maximum-scale=1.0,viewport-fit=cover">
+<title>NexusPad</title>
+<script>
+// iconfont symbols injected as inline SVG below
+</script>
 <style>
-.icon { width:1em; height:1em; vertical-align:-0.15em; fill:currentColor; overflow:hidden; }
+.icon{width:1em;height:1em;vertical-align:-0.15em;fill:currentColor;overflow:hidden}
 </style>
-<link rel="stylesheet" href="style.css">
+<style>
+/* ── Tokens ──────────────────────────────────────────── */
+:root{
+  --accent:#2395f3;
+  --accent-dk:#1565c0;
+  --accent-bg:rgba(35,149,243,.10);
+  --accent-bg2:rgba(35,149,243,.20);
+  --ok:#34a853;
+  --err:#e53935;
+  --bg:#eef4fd;
+  --surface:#ffffff;
+  --surface2:#ddeaf8;
+  --border:#c4d9f0;
+  --border2:#deeaf8;
+  --text:#1a2e4a;
+  --muted:#6e8aa8;
+  --r-sm:7px;
+  --r-md:11px;
+  --r-lg:16px;
+  --sh-key:0 1px 0 #a8c4e0;
+  --sh-card:0 1px 3px rgba(20,70,160,.08);
+}
+/* ── Reset ───────────────────────────────────────────── */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;width:100%;background:var(--bg);color:var(--text);
+  font-family:-apple-system,'PingFang SC',system-ui,sans-serif;
+  touch-action:none;user-select:none;-webkit-user-select:none;overflow:hidden}
+
+/* ── App shell ───────────────────────────────────────── */
+#app{display:flex;flex-direction:column;height:100%;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)}
+
+/* ── Topbar ──────────────────────────────────────────── */
+#topbar{
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  height:38px;
+  box-shadow:0 1px 4px rgba(20,70,160,.06);
+}
+#brand-icon{width:22px;height:22px;flex-shrink:0}
+#brand-name{font-size:12px;font-weight:800;color:#003472;
+  letter-spacing:.6px;flex-shrink:0}
+
+#status{
+  flex:1;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  font-size:11px;font-weight:500;
+}
+#status-dot{
+  width:7px;height:7px;border-radius:50%;flex-shrink:0;
+  background:var(--muted);transition:background .3s;
+}
+#status-text{
+  padding:2px 12px;border-radius:20px;
+  background:var(--surface2);color:var(--muted);
+  white-space:nowrap;transition:color .2s,background .2s;
+  font-weight:500;
+}
+#status.ok #status-dot{background:var(--ok);box-shadow:0 0 0 2px rgba(52,168,83,.2)}
+#status.ok #status-text{color:var(--ok);background:rgba(52,168,83,.1)}
+#status.err #status-dot{background:var(--err)}
+#status.err #status-text{color:var(--err);background:rgba(229,57,53,.1)}
+
+#topbar-btns{display:flex;gap:5px;flex-shrink:0}
+.top-btn{
+  height:28px;min-width:36px;padding:0 9px;
+  border:1px solid var(--border);border-radius:var(--r-sm);
+  background:var(--surface2);color:var(--muted);
+  cursor:pointer;touch-action:manipulation;
+  display:flex;align-items:center;justify-content:center;gap:4px;
+  font-size:11px;font-weight:700;letter-spacing:.3px;
+  transition:background .15s,border-color .15s,color .15s,transform .1s,box-shadow .15s;
+}
+.top-btn:active{transform:scale(.91)}
+.top-btn.active{
+  background:var(--accent);border-color:var(--accent-dk);color:#fff;
+  box-shadow:0 2px 7px rgba(35,149,243,.30);
+}
+.top-btn .icon{width:15px;height:15px}
+
+/* ── Main ────────────────────────────────────────────── */
+#main{display:flex;flex:1;min-height:0}
+#right{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+
+/* ── FK Panel ────────────────────────────────────────── */
+#fk-panel{
+  width:19vw;flex-shrink:0;
+  display:flex;flex-direction:column;
+  gap:0;padding:6px 5px;
+  background:var(--bg);
+  border-right:1px solid var(--border);
+  overflow-y:auto;
+  transition:width .25s cubic-bezier(.4,0,.2,1),opacity .2s,padding .25s;
+}
+#fk-panel.hidden{width:0;padding:0;opacity:0;overflow:hidden;border:none}
+
+.fk-group{display:flex;flex-direction:column;gap:3px;padding-bottom:6px}
+.fk-group+.fk-group{padding-top:6px;border-top:1px solid var(--border2)}
+.arrow-row{display:flex;gap:3px}
+.arrow-row .fk{flex:1}
+
+.fk{
+  padding:0;
+  border:1px solid var(--border);
+  border-radius:var(--r-sm);
+  font-size:11px;font-weight:600;color:var(--text);
+  cursor:pointer;touch-action:manipulation;
+  background:var(--surface);
+  box-shadow:var(--sh-key);
+  transition:background .08s,transform .08s,box-shadow .08s;
+  min-height:32px;
+  display:flex;align-items:center;justify-content:center;
+}
+.fk:active{background:var(--surface2);transform:scale(.93);box-shadow:none}
+.fk.mod.active{
+  background:var(--accent);border-color:var(--accent-dk);color:#fff;
+  box-shadow:0 2px 8px rgba(35,149,243,.32);
+}
+/* Combo keys — Ctrl shortcut feel */
+.fk.combo{
+  font-size:10px;font-weight:700;
+  background:var(--accent-bg);
+  border-color:rgba(35,149,243,.25);
+  color:var(--accent-dk);
+  box-shadow:none;
+  flex-direction:column;gap:1px;
+}
+.fk.combo::before{
+  content:'⌃';font-size:7px;color:var(--accent);opacity:.7;line-height:1;
+}
+.fk.combo:active{background:var(--accent-bg2)}
+.fk.arrow{font-size:14px;font-weight:800;color:var(--text)}
+
+.combo-group{display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px}
+
+/* ── Touchpad ────────────────────────────────────────── */
+#touchpad{
+  flex:1;min-height:0;position:relative;overflow:hidden;
+  background:var(--surface);
+  /* dot grid */
+  background-image:radial-gradient(circle,rgba(170,200,240,.7) 1px,transparent 1px);
+  background-size:20px 20px;
+  /* recessed feel */
+  box-shadow:inset 0 2px 6px rgba(20,70,160,.06);
+}
+/* Corner bracket decorations — pure CSS */
+#touchpad::before,#touchpad::after{
+  content:'';position:absolute;
+  width:14px;height:14px;
+  border-color:var(--border);border-style:solid;
+  pointer-events:none;
+}
+#touchpad::before{top:8px;left:8px;border-width:2px 0 0 2px;border-radius:3px 0 0 0}
+#touchpad::after {bottom:8px;right:8px;border-width:0 2px 2px 0;border-radius:0 0 3px 0}
+
+.hint{
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  color:var(--border2);font-size:11px;font-weight:600;
+  letter-spacing:4px;text-transform:uppercase;pointer-events:none;
+}
+
+#scroll-tag{
+  position:absolute;top:10px;right:12px;
+  background:rgba(35,149,243,.10);color:var(--accent);
+  padding:4px 12px;border-radius:20px;
+  font-size:11px;font-weight:600;
+  display:none;align-items:center;gap:5px;
+  border:1px solid rgba(35,149,243,.20);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+}
+#scroll-tag .icon{width:15px;height:15px}
+
+.ripple{
+  position:absolute;width:44px;height:44px;border-radius:50%;
+  pointer-events:none;transform:translate(-50%,-50%);
+  animation:rf .38s cubic-bezier(.4,0,.2,1) forwards;
+}
+@keyframes rf{0%{opacity:.4;transform:translate(-50%,-50%) scale(.2)}
+  100%{opacity:0;transform:translate(-50%,-50%) scale(1.8)}}
+
+/* ── Pinyin bar ──────────────────────────────────────── */
+#pinyin-bar{
+  display:flex;align-items:center;gap:5px;
+  padding:3px 10px;min-height:32px;
+  overflow-x:auto;white-space:nowrap;
+  background:var(--surface);border-bottom:1px solid var(--border);
+}
+#pinyin-bar.hidden{display:none}
+#pinyin-input{color:var(--accent);font-size:13px;font-weight:700;padding:2px 6px;flex-shrink:0}
+#pinyin-candidates{display:flex;gap:4px;overflow-x:auto;flex:1;-webkit-overflow-scrolling:touch}
+.pinyin-cand{
+  padding:3px 9px;font-size:14px;color:var(--text);
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:5px;cursor:pointer;flex-shrink:0;touch-action:manipulation;
+}
+.pinyin-cand:active{background:var(--accent);color:#fff;border-color:var(--accent-dk)}
+.pinyin-cand:first-child{border-color:var(--accent);color:var(--accent-dk);font-weight:600}
+
+/* ── Hidden textarea ─────────────────────────────────── */
+#txt{position:fixed;bottom:0;left:0;width:1px;height:1px;font-size:16px;z-index:-1;
+  border:none;resize:none;background:transparent;color:transparent;caret-color:transparent;
+  opacity:.001;overflow:hidden;padding:0;outline:none}
+
+/* ── OSK ─────────────────────────────────────────────── */
+#osk{
+  position:fixed;bottom:0;left:19vw;right:0;
+  height:47vh;
+  background:var(--bg);
+  border-top:1.5px solid var(--border);
+  display:flex;flex-direction:column;
+  padding:5px 5px 6px;gap:3px;z-index:10;
+  user-select:none;-webkit-user-select:none;
+  transform:translateY(0);visibility:visible;pointer-events:auto;
+  transition:transform .28s ease,left .25s ease,height .25s ease,visibility 0s;
+}
+#osk:not(.fk-open){left:0}
+#osk.hidden{
+  transform:translateY(100%);visibility:hidden;pointer-events:none;
+  transition:transform .28s ease,left .25s ease,height .25s ease,visibility 0s .28s;
+}
+.osk-layer{display:flex;flex-direction:column;gap:3px;flex:1}
+.osk-row{display:flex;gap:3px;justify-content:center;flex:1;min-height:0}
+.osk-spacer-05{flex:.5}
+
+/* Base key */
+.osk-key{
+  flex:1;
+  border:1px solid #bcd1ec;
+  border-radius:var(--r-sm);
+  background:var(--surface);color:var(--text);
+  font-size:clamp(11px,2.2vw,16px);font-weight:500;
+  cursor:pointer;touch-action:manipulation;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 1.5px 0 #9dbedd;
+  transition:background .05s,transform .05s;
+  user-select:none;-webkit-user-select:none;
+  position:relative;overflow:hidden;
+}
+.osk-key:active,.osk-key.pressed{
+  background:var(--surface2);transform:translateY(1px) scale(.95);
+  box-shadow:none;
+}
+/* Modifier keys — darker tray */
+.osk-key.osk-mod{
+  background:#d5e7f7;color:var(--muted);
+  font-size:clamp(9px,1.8vw,12px);font-weight:700;
+  box-shadow:0 1.5px 0 #90bad6;
+  border-color:#aac8e4;
+}
+.osk-key.osk-wide{flex:1.5}
+.osk-key.osk-space{
+  flex:5.5;font-size:clamp(9px,1.8vw,12px);
+  color:var(--muted);letter-spacing:.5px;
+}
+.osk-key.active{
+  background:var(--accent);border-color:var(--accent-dk);color:#fff;
+  box-shadow:0 2px 6px rgba(35,149,243,.34);
+}
+
+/* ── Sent flash ──────────────────────────────────────── */
+#sent{
+  position:fixed;top:50px;left:50%;transform:translateX(-50%);
+  background:rgba(35,149,243,.92);color:#fff;
+  padding:5px 18px;border-radius:20px;
+  font-size:11px;font-weight:600;
+  opacity:0;transition:opacity .15s;pointer-events:none;z-index:50;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  box-shadow:0 3px 10px rgba(35,149,243,.28);
+}
+#sent.show{opacity:1}
+
+/* ── Modals ──────────────────────────────────────────── */
+.modal-overlay{
+  position:fixed;inset:0;z-index:60;
+  display:none;align-items:center;justify-content:center;padding:20px;
+  background:rgba(15,40,100,.38);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.modal-overlay.show{display:flex}
+.modal-card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--r-lg);
+  box-shadow:0 12px 40px rgba(15,40,100,.18);
+  padding:28px 24px;
+  width:100%;max-width:310px;text-align:center;
+}
+.modal-card h3{font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px}
+.modal-card p{font-size:13px;color:var(--muted);line-height:1.55;margin-bottom:20px}
+.modal-btns{display:flex;gap:10px}
+.modal-btns button{
+  flex:1;padding:12px;border:none;border-radius:var(--r-sm);
+  font-size:14px;font-weight:700;cursor:pointer;touch-action:manipulation;
+  transition:transform .08s,filter .1s;
+}
+.modal-btns button:active{transform:scale(.95);filter:brightness(.9)}
+#btn-reject{background:var(--err);color:#fff}
+#btn-accept{background:var(--accent);color:#fff}
+
+#auth-modal{position:fixed;inset:0;z-index:70}
+#auth-pin{
+  width:100%;padding:14px;
+  border:2px solid var(--border);border-radius:var(--r-sm);
+  background:var(--bg);color:var(--accent);
+  font-size:28px;font-weight:700;text-align:center;
+  letter-spacing:8px;font-family:Consolas,monospace;
+  outline:none;-webkit-appearance:none;appearance:none;
+  transition:border-color .2s;
+}
+#auth-pin:focus{border-color:var(--accent);background:#fff}
+#auth-pin::placeholder{color:var(--border2);letter-spacing:6px}
+#auth-error{color:var(--err);font-size:12px;min-height:18px;margin-top:8px}
+#auth-submit{
+  width:100%;padding:12px;border:none;border-radius:var(--r-sm);
+  background:var(--accent);color:#fff;
+  font-size:15px;font-weight:700;cursor:pointer;
+  margin-top:12px;touch-action:manipulation;
+  box-shadow:0 4px 12px rgba(35,149,243,.30);
+  transition:transform .08s,background .15s;
+}
+#auth-submit:active{transform:scale(.97);background:var(--accent-dk)}
+.auth-result-btn{
+  width:100%;padding:12px;border:none;border-radius:var(--r-sm);
+  font-size:15px;font-weight:700;cursor:pointer;
+  margin-top:12px;touch-action:manipulation;transition:transform .08s;
+}
+.auth-result-btn.dismiss{background:var(--surface2);color:var(--text)}
+.auth-result-btn.dismiss:active{transform:scale(.97)}
+
+/* ── Landscape optimisation ──────────────────────────── */
+@media (orientation:landscape){
+  #topbar{height:34px;padding:0 10px;gap:7px}
+  .top-btn{height:26px;min-width:34px;font-size:10.5px}
+  #fk-panel{width:19vw;padding:5px 4px}
+  .fk{min-height:29px;font-size:10px}
+  .fk.arrow{font-size:12px}
+  .fk.combo{font-size:9px}
+  #osk{height:50vh;padding:4px 4px 5px;gap:2px}
+  .osk-key{font-size:clamp(10px,2vw,15px)}
+  .osk-key.osk-mod{font-size:clamp(8px,1.6vw,11px)}
+}
+@media (orientation:portrait){
+  #fk-panel{width:26vw}
+  #osk{left:26vw;height:34vh}
+  #osk:not(.fk-open){left:0}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:0s!important;transition-duration:0s!important}
+}
+</style>
 </head>
 <body>
-
+<svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="icon-danchujianpan" viewBox="0 0 1024 1024"><path d="M931.116543 834.933947 92.882434 834.933947c-15.178701 0-27.482935-12.304234-27.482935-27.482935L65.399499 463.912795c0-15.178701 12.304234-27.482935 27.482935-27.482935l838.234109 0c15.178701 0 27.482935 12.304234 27.482935 27.482935l0 343.538217C958.599478 822.629713 946.295244 834.933947 931.116543 834.933947zM931.116543 463.912795 92.882434 463.912795l0 343.538217 838.234109 0L931.116543 463.912795zM202.815195 573.844533l-54.965869 0 0-54.965869 54.965869 0L202.815195 573.844533zM202.815195 670.035316l-54.965869 0 0-54.965869 54.965869 0L202.815195 670.035316zM202.815195 766.226099l-54.965869 0 0-54.965869 54.965869 0L202.815195 766.226099zM299.005978 573.844533l-54.965869 0 0-54.965869 54.965869 0L299.005978 573.844533zM299.005978 670.035316l-54.965869 0 0-54.965869 54.965869 0L299.005978 670.035316zM299.005978 766.226099l-54.965869 0 0-54.965869 54.965869 0L299.005978 766.226099zM395.196761 573.844533l-54.965869 0 0-54.965869 54.965869 0L395.196761 573.844533zM395.196761 670.035316l-54.965869 0 0-54.965869 54.965869 0L395.196761 670.035316zM683.769109 766.226099 340.230891 766.226099l0-54.965869 343.538217 0L683.769109 766.226099zM779.959891 573.844533l-54.965869 0 0-54.965869 54.965869 0L779.959891 573.844533zM779.959891 670.035316l-54.965869 0 0-54.965869 54.965869 0L779.959891 670.035316zM779.959891 766.226099l-54.965869 0 0-54.965869 54.965869 0L779.959891 766.226099zM876.150674 573.844533l-54.965869 0 0-54.965869 54.965869 0L876.150674 573.844533zM876.150674 670.035316l-54.965869 0 0-54.965869 54.965869 0L876.150674 670.035316zM876.150674 766.226099l-54.965869 0 0-54.965869 54.965869 0L876.150674 766.226099zM628.803239 615.069447l54.965869 0 0 54.965869-54.965869 0L628.803239 615.069447zM628.803239 518.878664l54.965869 0 0 54.965869-54.965869 0L628.803239 518.878664zM532.612457 615.069447l54.965869 0 0 54.965869-54.965869 0L532.612457 615.069447zM532.612457 518.878664l54.965869 0 0 54.965869-54.965869 0L532.612457 518.878664zM436.421674 615.069447l54.965869 0 0 54.965869-54.965869 0L436.421674 615.069447zM436.421674 518.878664l54.965869 0 0 54.965869-54.965869 0L436.421674 518.878664zM511.997953 228.791823 373.7104 367.834576l-19.754926-19.863397 158.044526-158.90615 158.042479 158.90615-19.754926 19.863397L511.997953 228.791823z" fill="#020202"></path></symbol>
+  <symbol id="icon-shouqijianpan" viewBox="0 0 1024 1024"><path d="M931.361113 578.590628 92.637864 578.590628c-15.187911 0-27.499307-12.31242-27.499307-27.499307l0-343.738785c0-15.187911 12.311397-27.499307 27.499307-27.499307l838.72325 0c15.186887 0 27.499307 12.311397 27.499307 27.499307l0 343.738785C958.860421 566.278207 946.548 578.590628 931.361113 578.590628zM931.361113 207.352535 92.637864 207.352535l0 343.738785 838.72325 0L931.361113 207.352535zM202.635093 317.347718 147.636478 317.347718l0-54.996568 54.998615 0L202.635093 317.347718zM202.635093 413.595806 147.636478 413.595806l0-54.999638 54.998615 0L202.635093 413.595806zM202.635093 509.842871 147.636478 509.842871l0-54.998615 54.998615 0L202.635093 509.842871zM298.881135 317.347718l-54.998615 0 0-54.996568 54.998615 0L298.881135 317.347718zM298.881135 413.595806l-54.998615 0 0-54.999638 54.998615 0L298.881135 413.595806zM298.881135 509.842871l-54.998615 0 0-54.998615 54.998615 0L298.881135 509.842871zM395.128199 317.347718 340.130607 317.347718l0-54.996568 54.998615 0L395.129222 317.347718zM395.128199 413.595806 340.130607 413.595806l0-54.999638 54.998615 0L395.129222 413.595806zM683.869393 509.842871 340.130607 509.842871l0-54.998615 343.738785 0L683.869393 509.842871zM780.116457 317.347718l-54.998615 0 0-54.996568 54.998615 0L780.116457 317.347718zM780.116457 413.595806l-54.998615 0 0-54.999638 54.998615 0L780.116457 413.595806zM780.116457 509.842871l-54.998615 0 0-54.998615 54.998615 0L780.116457 509.842871zM876.363522 317.347718l-54.998615 0 0-54.996568 54.998615 0L876.363522 317.347718zM876.363522 413.595806l-54.998615 0 0-54.999638 54.998615 0L876.363522 413.595806zM876.363522 509.842871l-54.998615 0 0-54.998615 54.998615 0L876.363522 509.842871zM628.870778 358.596168l54.998615 0 0 54.999638-54.998615 0L628.870778 358.596168zM628.870778 262.35115l54.998615 0 0 54.996568-54.998615 0L628.870778 262.35115zM532.623713 358.596168l54.998615 0 0 54.999638-54.998615 0L532.623713 358.596168zM532.623713 262.35115l54.998615 0 0 54.996568-54.998615 0L532.623713 262.35115zM436.377672 358.596168l54.998615 0 0 54.999638-54.998615 0L436.377672 358.596168zM436.377672 262.35115l54.998615 0 0 54.996568-54.998615 0L436.377672 262.35115zM378.033869 669.14197l136.114051 136.114051 136.114051-136.114051 19.442818 19.444864L514.148943 844.145749 358.589005 688.585811 378.033869 669.14197z" fill="#020202"></path></symbol>
+  <symbol id="icon-tuodong" viewBox="0 0 1024 1024"><path d="M1024 273.067v-102.4C1024 76.8 947.2 0 853.333 0h-102.4v85.333h85.334c56.32 0 102.4 47.36 102.4 105.387v82.347H1024zM938.667 833.28c0 58.027-46.08 105.387-102.4 105.387h-85.334V1024h102.4C947.2 1024 1024 947.2 1024 853.333v-102.4h-85.333v82.347zM85.333 190.72c0-58.027 46.08-105.387 102.4-105.387h85.334V0h-102.4C76.8 0 0 76.8 0 170.667v102.4h85.333V190.72zM0 853.333C0 947.2 76.8 1024 170.667 1024h102.4v-85.333h-85.334c-56.32 0-102.4-47.36-102.4-105.387v-82.347H0v102.4z" fill="#707070"></path><path d="M508.052 272.503c13.225 0 23.177 9.818 26.45 22.862l9.953 160.03c3.34 9.818 6.612 13.044 9.952 13.044s9.953-9.817 9.953-9.817l23.177-133.942c0-9.818 13.226-19.635 23.178-19.635h3.34c13.225 3.295 23.177 16.34 19.838 29.384l-23.178 130.646s0 19.635 6.613 19.635c3.273 0 6.612-3.295 9.952-9.817l39.743-84.924c3.34-6.522 13.225-13.044 19.838-13.044 3.34 0 9.952 0 13.225 3.295 13.225 6.522 16.565 22.862 6.613 32.679l-66.194 153.508s-9.952 65.358-36.403 117.603v45.723H458.49V684.01s-26.45-16.34-52.968-58.767l-82.825-68.516c-9.953-9.817-13.225-26.157-3.34-35.905 6.613-6.522 13.225-9.818 19.838-9.818 6.613 0 9.953 3.296 16.565 6.522l46.356 35.906c6.612 3.295 9.952 6.522 16.565 6.522 13.225 0 26.45-19.566 6.612-81.697L385.551 347.61c-6.613-13.044 0-26.157 13.225-29.384h6.613c9.952 0 19.838 6.522 23.177 16.34l39.743 127.42v3.295c3.34 9.818 9.952 19.635 16.565 19.635 3.34 0 6.613-6.522 6.613-29.383l-9.953-156.804c0-13.181 9.953-26.226 26.518-26.226-3.34 0-3.34 0 0 0z m0-32.678h-3.34c-33.063 3.295-59.58 29.383-56.241 62.062-9.952-9.817-26.45-19.566-43.016-19.566-6.612 0-9.952 0-16.565 3.295-13.225 3.296-26.45 13.044-33.063 29.384-9.952 13.044-9.952 29.383-6.613 42.496l39.676 130.578c3.34 9.818 3.34 16.34 6.613 22.862L372.325 491.3c-9.952-9.818-23.177-13.044-36.403-13.044-16.565 0-33.063 6.522-43.015 19.635-13.226 13.044-16.566 26.156-16.566 42.427 0 16.34 9.953 29.384 19.838 39.201l79.42 65.358c16.564 26.157 33.062 42.496 46.355 55.54v29.384c0 16.34 16.565 32.679 33.063 32.679h145.612c16.565 0 33.063-13.045 33.063-32.68v-35.905c23.178-45.723 33.064-97.968 36.403-114.307l69.467-143.76c16.565-26.157 6.612-62.062-19.838-78.402-9.953-6.522-19.838-9.817-29.79-9.817-6.613 0-16.566 3.295-23.178 3.295l3.34-13.044c6.612-32.679-16.566-62.062-46.356-65.358h-9.952c-19.838 0-36.404 9.818-46.356 22.862v-3.295c-6.479-29.384-29.657-52.245-59.38-52.245" fill="#707070"></path></symbol>
+  <symbol id="icon-a-075_shuangzhigundong" viewBox="0 0 1024 1024"><path d="M207.61 236.44L176 270.63c-13.88 15.01-3.23 39.37 17.22 39.37h76.8c20.45 0 31.1-24.35 17.22-39.37l-31.61-34.19c-12.94-14-35.06-14-48 0zM255.61 660.56l31.61-34.19C301.1 611.36 290.45 587 270 587h-76.8c-20.45 0-31.1 24.35-17.22 39.37l31.61 34.19c12.94 14 35.06 14 48 0z" fill="#575C66"></path><path d="M231.8 622.3c-13.81 0-25-11.19-25-25V297c0-13.81 11.19-25 25-25s25 11.19 25 25v300.3c0 13.81-11.19 25-25 25z" fill="#575C66"></path><path d="M524.77 483.19S454.24 375.42 421.92 329.7c0 0-27.8-43.2 17.73-68.99 0 0 33.92-18.85 61.17 16.11 16.43 20.17 37.11 45.56 96.28 130.3 0 0 13.59 21.23 32.21 12.32 0 0 89.49-22.52 127.68-8.11 0 0 31.26 8.13 55.35 54.33 0 0 68.72 113.61 43.46 192.51 0 0-25.31 68.42-144.85 133.57 0 0-59.55 32.34-107.84 4.26 0 0-131.79-68.38-167.49-121.29 0 0-24.6-27.18-2.92-67.11 0 0 8.67-25.65-4.45-44.78 0 0-40.38-67.72-103.27-163.08 0 0-22.79-38.57 12.8-67.47 0 0 35.67-22.75 63.32 8.16 0 0 21.03 28.84 105.42 155.13 0 0 7.85 9.2 15.32 3.69 0 0 7.59-7.6 2.95-16.04z" fill="#9EA4AD"></path></symbol>
+</svg>
 <div id="app">
   <div id="topbar">
-    <div id="status" class="err">连接中...</div>
+    <svg id="brand-icon" viewBox="-20 -10 236 216" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <g transform="rotate(14, 150, 50)"><path d="M 114,28 C 137,19 171,21 190,33 C 193,48 191,70 186,78 C 162,85 132,83 115,73 C 112,59 112,45 114,28 Z" fill="#003472"/></g>
+      <g transform="rotate(-22, 150, 156)"><path d="M 121,138 C 141,128 169,130 179,142 C 181,155 179,171 174,179 C 154,187 126,185 119,174 C 117,162 118,150 121,138 Z" fill="#FFEA7C"/></g>
+      <g transform="rotate(-9, 73, 94)">
+        <path d="M 9,50 C 48,39 97,37 141,50 C 144,74 143,107 139,134 C 97,141 46,140 9,131 C 6,109 7,81 9,50 Z" fill="#0d1117"/>
+        <path d="M 24,92 C 48,60 100,54 126,79 C 106,115 48,118 24,92 Z" fill="white"/>
+        <path d="M 68,84 C 84,60 112,57 126,79 C 114,105 86,109 68,84 Z" fill="#0d1117"/>
+        <ellipse cx="90" cy="69" rx="12" ry="11" fill="white"/>
+        <path d="M 24,92 C 50,62 100,55 126,79 C 100,68 50,66 24,92 Z" fill="#0d1117"/>
+      </g>
+    </svg>
+    <span id="brand-name">NexusPad</span>
+    <div id="status" class="err">
+      <span id="status-dot"></span>
+      <span id="status-text">连接中...</span>
+    </div>
     <div id="topbar-btns">
-      <button id="ime-refresh-btn" class="top-btn" aria-label="刷新输入法状态" onclick="refreshIme()">
-        <span style="font-size:14px">↻</span>
+      <button id="ime-refresh-btn" class="top-btn" aria-label="刷新输入法" onclick="refreshIme()">
+        <span style="font-size:13px;line-height:1">↻</span>
       </button>
-      <button id="fk-toggle" class="top-btn active" aria-label="功能键" onclick="toggleFk()">
-        <span style="font-size:11px;font-weight:700">Fn</span>
-      </button>
+      <button id="fk-toggle" class="top-btn active" aria-label="功能键" onclick="toggleFk()">Fn</button>
       <button id="kb-btn" class="top-btn" aria-label="键盘" onclick="toggleKb()">
         <svg class="icon" id="kb-icon"><use xlink:href="#icon-danchujianpan"></use></svg>
       </button>
@@ -31,9 +404,9 @@
   <div id="main">
     <div id="fk-panel">
       <div class="fk-group">
-        <button class="fk" data-key="Escape">ESC</button>
+        <button class="fk" data-key="Escape">Esc</button>
         <button class="fk" data-key="Tab">Tab</button>
-        <button class="fk" data-key="Delete">DEL</button>
+        <button class="fk" data-key="Delete">Del</button>
       </div>
       <div class="fk-group">
         <button class="fk arrow" data-key="Up">↑</button>
@@ -61,51 +434,29 @@
     <div id="right">
       <div id="touchpad">
         <div class="hint">触控板</div>
-        <div id="scroll-tag"><svg class="icon" id="scroll-icon"><use xlink:href=""></use></svg><span id="scroll-text"></span></div>
+        <div id="scroll-tag">
+          <svg class="icon" id="scroll-icon"><use xlink:href=""></use></svg>
+          <span id="scroll-text"></span>
+        </div>
       </div>
 
       <div id="osk" class="hidden fk-open">
-        <!-- Pinyin candidate bar -->
         <div id="pinyin-bar" class="hidden">
           <span id="pinyin-input"></span>
           <div id="pinyin-candidates"></div>
         </div>
-        <!-- Letter layer -->
         <div class="osk-layer" data-layer="alpha">
           <div class="osk-row">
-            <button class="osk-key" data-k="q">q</button>
-            <button class="osk-key" data-k="w">w</button>
-            <button class="osk-key" data-k="e">e</button>
-            <button class="osk-key" data-k="r">r</button>
-            <button class="osk-key" data-k="t">t</button>
-            <button class="osk-key" data-k="y">y</button>
-            <button class="osk-key" data-k="u">u</button>
-            <button class="osk-key" data-k="i">i</button>
-            <button class="osk-key" data-k="o">o</button>
-            <button class="osk-key" data-k="p">p</button>
+            <button class="osk-key" data-k="q">q</button><button class="osk-key" data-k="w">w</button><button class="osk-key" data-k="e">e</button><button class="osk-key" data-k="r">r</button><button class="osk-key" data-k="t">t</button><button class="osk-key" data-k="y">y</button><button class="osk-key" data-k="u">u</button><button class="osk-key" data-k="i">i</button><button class="osk-key" data-k="o">o</button><button class="osk-key" data-k="p">p</button>
           </div>
           <div class="osk-row">
             <div class="osk-spacer-05"></div>
-            <button class="osk-key" data-k="a">a</button>
-            <button class="osk-key" data-k="s">s</button>
-            <button class="osk-key" data-k="d">d</button>
-            <button class="osk-key" data-k="f">f</button>
-            <button class="osk-key" data-k="g">g</button>
-            <button class="osk-key" data-k="h">h</button>
-            <button class="osk-key" data-k="j">j</button>
-            <button class="osk-key" data-k="k">k</button>
-            <button class="osk-key" data-k="l">l</button>
+            <button class="osk-key" data-k="a">a</button><button class="osk-key" data-k="s">s</button><button class="osk-key" data-k="d">d</button><button class="osk-key" data-k="f">f</button><button class="osk-key" data-k="g">g</button><button class="osk-key" data-k="h">h</button><button class="osk-key" data-k="j">j</button><button class="osk-key" data-k="k">k</button><button class="osk-key" data-k="l">l</button>
             <div class="osk-spacer-05"></div>
           </div>
           <div class="osk-row">
             <button class="osk-key osk-mod osk-wide" data-action="shift">⇧</button>
-            <button class="osk-key" data-k="z">z</button>
-            <button class="osk-key" data-k="x">x</button>
-            <button class="osk-key" data-k="c">c</button>
-            <button class="osk-key" data-k="v">v</button>
-            <button class="osk-key" data-k="b">b</button>
-            <button class="osk-key" data-k="n">n</button>
-            <button class="osk-key" data-k="m">m</button>
+            <button class="osk-key" data-k="z">z</button><button class="osk-key" data-k="x">x</button><button class="osk-key" data-k="c">c</button><button class="osk-key" data-k="v">v</button><button class="osk-key" data-k="b">b</button><button class="osk-key" data-k="n">n</button><button class="osk-key" data-k="m">m</button>
             <button class="osk-key osk-mod osk-wide" data-action="backspace">⌫</button>
           </div>
           <div class="osk-row">
@@ -117,55 +468,20 @@
             <button class="osk-key osk-mod" data-action="return">⏎</button>
           </div>
         </div>
-
-        <!-- Symbol layer -->
         <div class="osk-layer" data-layer="sym" style="display:none">
           <div class="osk-row">
-            <button class="osk-key" data-k="1">1</button>
-            <button class="osk-key" data-k="2">2</button>
-            <button class="osk-key" data-k="3">3</button>
-            <button class="osk-key" data-k="4">4</button>
-            <button class="osk-key" data-k="5">5</button>
-            <button class="osk-key" data-k="6">6</button>
-            <button class="osk-key" data-k="7">7</button>
-            <button class="osk-key" data-k="8">8</button>
-            <button class="osk-key" data-k="9">9</button>
-            <button class="osk-key" data-k="0">0</button>
+            <button class="osk-key" data-k="1">1</button><button class="osk-key" data-k="2">2</button><button class="osk-key" data-k="3">3</button><button class="osk-key" data-k="4">4</button><button class="osk-key" data-k="5">5</button><button class="osk-key" data-k="6">6</button><button class="osk-key" data-k="7">7</button><button class="osk-key" data-k="8">8</button><button class="osk-key" data-k="9">9</button><button class="osk-key" data-k="0">0</button>
           </div>
           <div class="osk-row">
-            <button class="osk-key" data-k="shift+1">!</button>
-            <button class="osk-key" data-k="shift+2">@</button>
-            <button class="osk-key" data-k="shift+3">#</button>
-            <button class="osk-key" data-k="shift+4">$</button>
-            <button class="osk-key" data-k="shift+5">%</button>
-            <button class="osk-key" data-k="shift+6">^</button>
-            <button class="osk-key" data-k="shift+7">&amp;</button>
-            <button class="osk-key" data-k="shift+8">*</button>
-            <button class="osk-key" data-k="shift+9">(</button>
-            <button class="osk-key" data-k="shift+0">)</button>
+            <button class="osk-key" data-k="shift+1">!</button><button class="osk-key" data-k="shift+2">@</button><button class="osk-key" data-k="shift+3">#</button><button class="osk-key" data-k="shift+4">$</button><button class="osk-key" data-k="shift+5">%</button><button class="osk-key" data-k="shift+6">^</button><button class="osk-key" data-k="shift+7">&amp;</button><button class="osk-key" data-k="shift+8">*</button><button class="osk-key" data-k="shift+9">(</button><button class="osk-key" data-k="shift+0">)</button>
           </div>
           <div class="osk-row">
-            <button class="osk-key" data-k="`">`</button>
-            <button class="osk-key" data-k="-">-</button>
-            <button class="osk-key" data-k="=">=</button>
-            <button class="osk-key" data-k="[">[</button>
-            <button class="osk-key" data-k="]">]</button>
-            <button class="osk-key" data-k=";">;</button>
-            <button class="osk-key" data-k="'">'</button>
-            <button class="osk-key" data-k="shift+`">~</button>
-            <button class="osk-key" data-k="\\">\\</button>
+            <button class="osk-key" data-k="`">`</button><button class="osk-key" data-k="-">-</button><button class="osk-key" data-k="=">=</button><button class="osk-key" data-k="[">[</button><button class="osk-key" data-k="]">]</button><button class="osk-key" data-k=";">;</button><button class="osk-key" data-k="'">'</button><button class="osk-key" data-k="shift+`">~</button><button class="osk-key" data-k="\\">\\</button>
             <button class="osk-key osk-mod osk-wide" data-action="backspace">⌫</button>
           </div>
           <div class="osk-row">
             <button class="osk-key osk-mod" data-action="sym">ABC</button>
-            <button class="osk-key" data-k=",">,</button>
-            <button class="osk-key" data-k=".">.</button>
-            <button class="osk-key" data-k="/">/</button>
-            <button class="osk-key" data-k="shift+\\">|</button>
-            <button class="osk-key" data-k="shift+;">:</button>
-            <button class="osk-key" data-k="shift+'">"</button>
-            <button class="osk-key" data-k="shift+,">&lt;</button>
-            <button class="osk-key" data-k="shift+.">&gt;</button>
+            <button class="osk-key" data-k=",">,</button><button class="osk-key" data-k=".">.</button><button class="osk-key" data-k="/">/</button><button class="osk-key" data-k="shift+\\">|</button><button class="osk-key" data-k="shift+;">:</button><button class="osk-key" data-k="shift+'">"</button><button class="osk-key" data-k="shift+,">&lt;</button><button class="osk-key" data-k="shift+.">&gt;</button>
             <button class="osk-key osk-mod" data-action="return">⏎</button>
           </div>
         </div>
@@ -175,27 +491,24 @@
 </div>
 
 <div id="sent">已发送</div>
-<!-- Hidden textarea for proot Chinese IME composition -->
 <textarea id="txt" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
 
-<!-- Approval overlay -->
-<div id="approval-overlay">
-  <div id="approval-modal">
+<div id="approval-overlay" class="modal-overlay">
+  <div class="modal-card">
     <h3>新设备请求连接</h3>
     <p id="approval-info">有设备正在尝试接管控制权</p>
-    <div class="approval-btns">
+    <div class="modal-btns">
       <button id="btn-reject" onclick="approvalResp('reject')">拒绝</button>
       <button id="btn-accept" onclick="approvalResp('accept')">同意</button>
     </div>
   </div>
 </div>
 
-<!-- Auth overlay -->
-<div id="auth-overlay">
-  <div id="auth-modal">
+<div id="auth-overlay" class="modal-overlay">
+  <div class="modal-card">
     <h3>输入配对码</h3>
     <p>请在电脑端查看配对码</p>
-    <input id="auth-pin" type="tel" maxlength="6" placeholder="------" autocomplete="off" inputmode="numeric">
+    <input id="auth-pin" type="tel" maxlength="6" placeholder="──────" autocomplete="off" inputmode="numeric">
     <div id="auth-error"></div>
     <button id="auth-submit" onclick="submitAuth()">连接</button>
   </div>

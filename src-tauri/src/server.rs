@@ -15,6 +15,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, Mutex, oneshot};
 use serde_json;
 use anyhow::Result;
+use tauri::Emitter;
 use tracing::{info, warn};
 
 use crate::input::InputSimulator;
@@ -54,10 +55,14 @@ pub struct ServerState {
     pub pending_ws: Arc<Mutex<Option<SocketAddr>>>,
     /// Channel to send approval response from active → pending handler
     pub approval_tx: Arc<Mutex<Option<oneshot::Sender<String>>>>,
+    /// Address of device currently in the connecting/auth phase (before becoming active)
+    pub connecting_addr: Arc<Mutex<Option<SocketAddr>>>,
     /// PIN code for authentication (wrapped in Mutex for interior mutability)
     pub pin: Mutex<String>,
     pub event_tx: broadcast::Sender<String>,
     pub frontend_dir: PathBuf,
+    /// Tauri app handle for emitting events to the GUI
+    pub app_handle: Option<tauri::AppHandle>,
 }
 
 /// Generate a random 6-digit PIN
@@ -68,7 +73,12 @@ fn generate_pin() -> String {
 }
 
 impl ServerState {
-    pub fn new(input: InputSimulator, frontend_dir: PathBuf, ime_toggle_key: Option<String>) -> Self {
+    pub fn new(
+        input: InputSimulator,
+        frontend_dir: PathBuf,
+        ime_toggle_key: Option<String>,
+        app_handle: Option<tauri::AppHandle>,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel(100);
         Self {
             input: Arc::new(Mutex::new(input)),
@@ -78,9 +88,11 @@ impl ServerState {
             connected_device: Arc::new(Mutex::new(None)),
             pending_ws: Arc::new(Mutex::new(None)),
             approval_tx: Arc::new(Mutex::new(None)),
+            connecting_addr: Arc::new(Mutex::new(None)),
             pin: Mutex::new(generate_pin()),
             event_tx,
             frontend_dir,
+            app_handle,
         }
     }
 
@@ -103,6 +115,13 @@ impl ServerState {
         let status = self.platform.get_ime_status();
         let msg = serde_json::to_string(&ServerMsg::ImeInit { status }).unwrap();
         self.send_to_active(&msg).await;
+    }
+
+    /// Emit a Tauri event to the GUI frontend
+    fn emit_gui_event(&self, event: &str, payload: serde_json::Value) {
+        if let Some(ref handle) = self.app_handle {
+            let _ = handle.emit(event, payload);
+        }
     }
 }
 
@@ -392,6 +411,9 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
     let addr_str = format!("{}", addr);
     info!("Client connected: {} ({})", addr_str, device_name);
 
+    // Track this device as "connecting" (before auth)
+    *state.connecting_addr.lock().await = Some(addr);
+
     // Split socket into sink (for sending) and stream (for receiving)
     let (mut ws_sink, mut ws_stream) = socket.split();
 
@@ -411,18 +433,19 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
     let auth_msg = serde_json::to_string(&ServerMsg::AuthRequired).unwrap();
     let _ = tx.send(Message::Text(auth_msg.into()));
 
+    // Notify GUI: a device is connecting (QR → PIN transition)
+    state.emit_gui_event("device-connecting", serde_json::json!({
+        "device_name": device_name,
+    }));
+
     let authenticated = loop {
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs(60),
-            ws_stream.next(),
-        ).await {
-            Ok(Some(Ok(Message::Text(text)))) => {
+        match ws_stream.next().await {
+            Some(Ok(Message::Text(text))) => {
                 let text_str: &str = text.as_ref();
                 if let Ok(ClientMsg::Auth { pin }) = serde_json::from_str(text_str) {
                     let current_pin = state.pin.lock().await.clone();
                     if pin == current_pin {
                         info!("{} authenticated", addr_str);
-                        // Refresh PIN for next device
                         *state.pin.lock().await = generate_pin();
                         break true;
                     } else {
@@ -432,11 +455,21 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
                     }
                 }
             }
+            // Connection closed, error, or non-text message → device left
             _ => break false,
         }
     };
 
     if !authenticated {
+        // Clear connecting_addr since this device is leaving
+        {
+            let mut connecting = state.connecting_addr.lock().await;
+            if *connecting == Some(addr) {
+                *connecting = None;
+                // Notify GUI: connecting device left without auth
+                state.emit_gui_event("device-connecting-cancelled", serde_json::json!({}));
+            }
+        }
         let _ = tx.send(Message::Close(Some(axum::extract::ws::CloseFrame {
             code: 4003,
             reason: "auth failed".into(),
@@ -452,6 +485,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
         // No active controller → take control immediately
         *state.active_ws.lock().await = Some((addr, tx.clone()));
         *state.connected_device.lock().await = Some(device_name.clone());
+        *state.connecting_addr.lock().await = None; // no longer "connecting"
         let proot = if is_proot() { Some(true) } else { None };
         let msg = serde_json::to_string(&ServerMsg::CtrlOk { proot }).unwrap();
         let _ = tx.send(Message::Text(msg.into()));
@@ -459,6 +493,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
         info!("{} is now controller", addr_str);
         // Push initial IME status to the new controller
         state.push_ime_status().await;
+        // Notify GUI: device authenticated (PIN → STOP transition)
+        state.emit_gui_event("device-authenticated", serde_json::json!({
+            "device_name": device_name,
+        }));
     } else {
         // Active controller exists → need approval
         let has_pending = state.pending_ws.lock().await.is_some();
@@ -513,6 +551,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
                 *state.connected_device.lock().await = Some(device_name.clone());
                 *state.pending_ws.lock().await = None;
                 *state.approval_tx.lock().await = None;
+                *state.connecting_addr.lock().await = None;
 
                 let proot = if is_proot() { Some(true) } else { None };
                 let msg = serde_json::to_string(&ServerMsg::CtrlOk { proot }).unwrap();
@@ -521,6 +560,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
                 info!("{} approved, now controller", addr_str);
                 // Push initial IME status to the new controller
                 state.push_ime_status().await;
+                // Notify GUI: device authenticated (PIN → STOP transition)
+                state.emit_gui_event("device-authenticated", serde_json::json!({
+                    "device_name": device_name,
+                }));
             }
             _ => {
                 let reason = match result {
@@ -570,12 +613,23 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
     }
 
     // Cleanup on disconnect
-    let mut active = state.active_ws.lock().await;
-    if active.as_ref().map(|(a, _)| *a) == Some(addr) {
-        *active = None;
-        *state.connected_device.lock().await = None;
-    }
-    drop(active);
+    let was_active = {
+        let mut active = state.active_ws.lock().await;
+        let was = active.as_ref().map(|(a, _)| *a) == Some(addr);
+        if was {
+            *active = None;
+            *state.connected_device.lock().await = None;
+        }
+        was
+    };
+
+    // Check if this was a connecting device (scanned QR but didn't authenticate)
+    let was_connecting = {
+        let mut connecting = state.connecting_addr.lock().await;
+        let was = *connecting == Some(addr);
+        if was { *connecting = None; }
+        was
+    };
 
     let mut pending = state.pending_ws.lock().await;
     if *pending == Some(addr) {
@@ -588,6 +642,17 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
 
     state.send_event(format!("❌ {} 已断开", addr_str));
     info!("Client disconnected: {}", addr_str);
+
+    if was_active {
+        // Active controller disconnected → STOP → START
+        state.emit_gui_event("device-disconnected", serde_json::json!({
+            "device_name": device_name,
+        }));
+    } else if was_connecting {
+        // Device scanned QR but left without entering PIN → QR → START
+        state.emit_gui_event("device-connecting-cancelled", serde_json::json!({}));
+    }
+
     forward_task.abort();
 }
 

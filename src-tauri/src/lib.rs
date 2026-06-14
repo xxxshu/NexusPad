@@ -17,11 +17,10 @@ use server::ServerState;
 pub struct AppState {
     server_state: Option<Arc<ServerState>>,
     stop_tx: Option<broadcast::Sender<()>>,
+    server_handle: Option<tokio::task::JoinHandle<()>>,
     port: u16,
     running: bool,
-    /// Path to the config directory (for persistence)
     config_path: PathBuf,
-    /// Current app configuration
     config: AppConfig,
 }
 
@@ -119,14 +118,19 @@ async fn start_server_cmd(
         }
     };
 
-    let server_state = Arc::new(ServerState::new(input_sim, frontend_dir, app.config.ime_toggle_key.clone()));
+    let server_state = Arc::new(ServerState::new(
+        input_sim,
+        frontend_dir,
+        app.config.ime_toggle_key.clone(),
+        Some(app_handle.clone()),
+    ));
     let (stop_tx, stop_rx) = broadcast::channel(1);
 
     let state_clone = server_state.clone();
     let port_clone = port;
 
     // Start server in background
-    tokio::spawn(async move {
+    let server_handle = tokio::spawn(async move {
         if let Err(e) = server::start_server(port_clone, state_clone, stop_rx).await {
             tracing::error!("Server error: {}", e);
         }
@@ -139,6 +143,7 @@ async fn start_server_cmd(
 
     app.server_state = Some(server_state);
     app.stop_tx = Some(stop_tx);
+    app.server_handle = Some(server_handle);
     app.port = port;
     app.running = true;
 
@@ -174,6 +179,22 @@ async fn stop_server_cmd(state: State<'_, Mutex<AppState>>) -> Result<(), String
 
     if let Some(tx) = app.stop_tx.take() {
         let _ = tx.send(());
+    }
+
+    // Wait for server task to finish (releases the port)
+    if let Some(handle) = app.server_handle.take() {
+        drop(app); // release the lock while waiting
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_secs(3),
+            handle,
+        ).await;
+        // Re-acquire lock to finish cleanup
+        let mut app = state.lock().await;
+        if let Some(server_state) = app.server_state.take() {
+            server_state.input.lock().await.close().await;
+        }
+        app.running = false;
+        return Ok(());
     }
 
     // Close input simulator
@@ -215,6 +236,23 @@ async fn save_ime_config(
     Ok(())
 }
 
+// ─── New Commands ─────────────────────────────────────────
+
+/// Check if a port is available for binding
+#[tauri::command]
+async fn check_port(port: u16) -> Result<bool, String> {
+    match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        Ok(_) => Ok(true),   // port available
+        Err(_) => Ok(false), // port in use
+    }
+}
+
+/// Get the application version string
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 // ─── Tauri App Setup ──────────────────────────────────────
 
 pub fn run() {
@@ -222,6 +260,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let config_path = app.path().app_config_dir()
                 .unwrap_or_else(|_| PathBuf::from("."));
@@ -229,11 +271,67 @@ pub fn run() {
             app.manage(Mutex::new(AppState {
                 server_state: None,
                 stop_tx: None,
+                server_handle: None,
                 port: 8765,
                 running: false,
                 config_path,
                 config: loaded_config,
             }));
+
+            // ── System Tray ──────────────────────────────
+            use tauri::menu::{MenuBuilder, MenuItemBuilder};
+            use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
+
+            let show_item = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&show_item, &quit_item])
+                .build()?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .tooltip("NexusPad")
+                .on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // ── Close-to-tray: intercept window close ────
+            let window = app.get_webview_window("main").unwrap();
+            let window_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window_clone.hide();
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -242,6 +340,8 @@ pub fn run() {
             stop_server_cmd,
             get_ime_config,
             save_ime_config,
+            check_port,
+            app_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -284,7 +384,7 @@ pub fn run_cli() {
 
         let frontend_dir = exe_dir.clone();
         let ime_toggle_key = app_config.ime_toggle_key.clone();
-        let server_state = Arc::new(server::ServerState::new(input_sim, frontend_dir, ime_toggle_key));
+        let server_state = Arc::new(server::ServerState::new(input_sim, frontend_dir, ime_toggle_key, None));
         let pin = server_state.pin.lock().await.clone();
         let local_ip = server::get_local_ip();
         let url = format!("http://{}:{}", local_ip, port);

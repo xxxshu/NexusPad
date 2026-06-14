@@ -1,0 +1,18 @@
+<svg width="256" height="256" viewBox="-20 -10 236 216" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Block B — medium navy, upper-right, +14° -->
+  <g transform="rotate(14, 150, 50)">
+    <path d="M 114,28 C 137,19 171,21 190,33 C 193,48 191,70 186,78 C 162,85 132,83 115,73 C 112,59 112,45 114,28 Z" fill="#003472"/>
+  </g>
+  <!-- Block C — yellow accent, lower-right, -22° -->
+  <g transform="rotate(-22, 150, 156)">
+    <path d="M 121,138 C 141,128 169,130 179,142 C 181,155 179,171 174,179 C 154,187 126,185 119,174 C 117,162 118,150 121,138 Z" fill="#FFEA7C"/>
+  </g>
+  <!-- Block A — dominant dark pad, -9°, contains mischievous eye -->
+  <g transform="rotate(-9, 73, 94)">
+    <path d="M 9,50 C 48,39 97,37 141,50 C 144,74 143,107 139,134 C 97,141 46,140 9,131 C 6,109 7,81 9,50 Z" fill="#0d1117"/>
+    <path d="M 24,92 C 48,60 100,54 126,79 C 106,115 48,118 24,92 Z" fill="white"/>
+    <path d="M 68,84 C 84,60 112,57 126,79 C 114,105 86,109 68,84 Z" fill="#0d1117"/>
+    <ellipse cx="90" cy="69" rx="12" ry="11" fill="white"/>
+    <path d="M 24,92 C 50,62 100,55 126,79 C 100,68 50,66 24,92 Z" fill="#0d1117"/>
+  </g>
+</svg>

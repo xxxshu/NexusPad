@@ -29,3 +29,9 @@ Thumbs.db
 
 # Tauri auto-generated schemas
 src-tauri/gen/
+
+# Desktop UI build output
+src-tauri/ui/dist/
+
+# Figma Make design reference
+Design Desktop GUI for NexusPad/

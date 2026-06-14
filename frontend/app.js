@@ -3,7 +3,12 @@ const $ = id => document.getElementById(id);
 let ws, reconn, hasControl = false, hasEverControlled = false, isProot = false;
 let imeStatus = 'en'; // Server-pushed IME state: 'en' or 'zh'
 let imeJustToggled = 0; // Timestamp of last toggle — guard against stale server response
-const st = $('status');
+const st = $('status'), statusText = $('status-text');
+
+function setStatus(text, cls) {
+  st.className = cls;
+  statusText.textContent = text;
+}
 
 // ─── Haptic feedback ────────────────────────────────
 let hapticAudioCtx = null;
@@ -53,21 +58,21 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && 'vi
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => { st.textContent = '已连接'; st.className = 'ok'; clearTimeout(reconn) };
+  ws.onopen = () => { setStatus('已连接', 'ok'); clearTimeout(reconn) };
   ws.onclose = e => {
     hasControl = false;
     $('approval-overlay').classList.remove('show');
     $('auth-overlay').classList.remove('show');
-    if (e.code === 4001) { st.textContent = '已被新设备接管'; st.className = 'err'; return; }
+    if (e.code === 4001) { setStatus('已被新设备接管', 'err'); return; }
     if (e.code === 4002) {
       const reason = e.reason || '';
-      if (reason === 'rejected') { st.textContent = '被拒绝'; st.className = 'err'; }
-      else if (reason === 'timeout') { st.textContent = '等待超时'; st.className = 'err'; }
-      else if (reason === 'busy') { st.textContent = '已有设备在等待'; st.className = 'err'; }
+      if (reason === 'rejected') { setStatus('被拒绝', 'err'); }
+      else if (reason === 'timeout') { setStatus('等待超时', 'err'); }
+      else if (reason === 'busy') { setStatus('已有设备在等待', 'err'); }
       return;
     }
-    if (e.code === 1000) { st.textContent = '服务已停止'; st.className = 'err'; return; }
-    st.textContent = '已断开'; st.className = 'err';
+    if (e.code === 1000) { setStatus('服务已停止', 'err'); return; }
+    setStatus('已断开', 'err');
     if (hasEverControlled) reconn = setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();
@@ -76,7 +81,7 @@ function connect() {
     if (d.a === 'ctrl_ok') {
       hasControl = true; hasEverControlled = true;
       isProot = !!d.proot;
-      st.textContent = '控制中'; st.className = 'ok';
+      setStatus('控制中', 'ok');
       $('auth-overlay').classList.remove('show');
     } else if (d.a === 'auth_required') {
       $('auth-overlay').classList.add('show');
@@ -103,10 +108,10 @@ function connect() {
         }
         return;
       }
-      if (d.reason === 'timeout') { st.textContent = '等待超时'; st.className = 'err'; }
-      else if (d.reason === 'rejected') { st.textContent = '被拒绝'; st.className = 'err'; }
-      else if (d.reason === 'busy') { st.textContent = '已有设备在等待'; st.className = 'err'; }
-      else { st.textContent = '等待同意...'; st.className = 'ok'; }
+      if (d.reason === 'timeout') { setStatus('等待超时', 'err'); }
+      else if (d.reason === 'rejected') { setStatus('被拒绝', 'err'); }
+      else if (d.reason === 'busy') { setStatus('已有设备在等待', 'err'); }
+      else { setStatus('等待同意...', 'ok'); }
     } else if (d.a === 'approval_req') {
       $('approval-info').textContent = d.ip + ' 正在尝试接管';
       $('approval-overlay').classList.add('show');
