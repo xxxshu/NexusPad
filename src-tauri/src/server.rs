@@ -142,6 +142,28 @@ const VIRTUAL_PREFIXES: &[&str] = &[
     "ztr", "ham", "ppp", "sstp", "vpn",
 ];
 
+/// Check if an IPv4 address string is in RFC 1918 private ranges:
+/// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
+/// Only these ranges are guaranteed to be directly reachable on a LAN.
+/// Proxy Fake-IP ranges (e.g. 198.18.0.0/15 from Clash) are NOT private.
+fn is_rfc1918_private(ip: &str) -> bool {
+    if ip.starts_with("10.") {
+        return true;
+    }
+    if ip.starts_with("192.168.") {
+        return true;
+    }
+    if ip.starts_with("172.") {
+        // 172.16.0.0 – 172.31.255.255
+        if let Some(second) = ip.split('.').nth(1) {
+            if let Ok(n) = second.parse::<u8>() {
+                return (16..=31).contains(&n);
+            }
+        }
+    }
+    false
+}
+
 /// Get LAN IP address (prefer WiFi/Ethernet over virtual adapters).
 ///
 /// Detection order:
@@ -160,13 +182,12 @@ const VIRTUAL_PREFIXES: &[&str] = &[
 pub fn get_local_ip() -> String {
     // 1) Use UDP connect as a "hint" — it's fast and reflects kernel routing,
     //    but we MUST verify the result against real interfaces to avoid proxy/
-    //    VPN adapter IPs (e.g. 198.x.x.x from Clash/V2Ray TUN adapters).
+    //    VPN adapter IPs (e.g. 198.18.0.x from Clash Fake-IP).
     let udp_ip = udp_local_ip_fast();
-    let mut udp_verified = false;
 
     // 2) Interface scan with timeout — finds real LAN addresses.
     //    If the UDP IP matches a real (non-virtual) interface, trust it.
-    //    Otherwise, rank candidates: preferred (wlan/eth) + private IP first.
+    //    Otherwise, rank candidates by interface type and RFC 1918 private IP.
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = std::thread::Builder::new()
         .name("local-ip-scan".into())
@@ -174,8 +195,8 @@ pub fn get_local_ip() -> String {
             let result = (|| -> Option<(String, bool)> {
                 let addrs = local_ip_address::list_afinet_netifas().ok()?;
                 let udp_ref = udp_ip.as_deref();
-                let mut preferred_private = None; // wlan/eth + 192.168/10.x
-                let mut any_private = None;        // non-virtual + 192.168/10.x
+                let mut preferred_private = None; // wlan/eth + RFC 1918
+                let mut any_private = None;        // non-virtual + RFC 1918
                 let mut preferred_any = None;      // wlan/eth + any IP
                 let mut any_non_virtual = None;    // non-virtual + any IP
                 for (name, ip) in &addrs {
@@ -191,12 +212,12 @@ pub fn get_local_ip() -> String {
                         let is_virtual = VIRTUAL_PREFIXES
                             .iter()
                             .any(|p| lower.starts_with(p));
-                        let is_private = s.starts_with("192.168.") || s.starts_with("10.");
+                        let is_private = is_rfc1918_private(&s);
 
-                        // If UDP IP matches a real (non-virtual) interface, it's
-                        // verified — the kernel uses this interface for routing
-                        // and the phone can reach it on the LAN.
-                        if Some(s.as_str()) == udp_ref && !is_virtual {
+                        // If UDP IP matches a real (non-virtual) interface AND
+                        // it's RFC 1918 private, it's verified — the kernel uses
+                        // this interface for routing and the phone can reach it.
+                        if Some(s.as_str()) == udp_ref && !is_virtual && is_private {
                             return Some((s, true));
                         }
 
@@ -214,10 +235,11 @@ pub fn get_local_ip() -> String {
                         }
                     }
                 }
+                // Only return a candidate if it has a private IP (safe for LAN).
+                // Non-private IPs (e.g. 198.18.0.x from proxy Fake-IP) are NOT
+                // reachable from the phone.
                 preferred_private
                     .or(any_private)
-                    .or(preferred_any)
-                    .or(any_non_virtual)
                     .map(|ip| (ip, false))
             })();
             let _ = tx.send(result);
@@ -241,20 +263,14 @@ pub fn get_local_ip() -> String {
         return ip;
     }
 
-    // 4) Last resort — use whatever the kernel routing table says.
-    if let Some(ip) = udp_local_ip_fast() {
-        if !ip.starts_with("127.") {
-            tracing::warn!("get_local_ip via UDP fallback (unverified): {}", ip);
-            return ip;
-        }
-    }
-
-    // 5) Absolute last resort
+    // 4) Absolute last resort
     "127.0.0.1".to_string()
 }
 
 /// Run `ip -o -4 addr show` and pick the best LAN address, filtering out
 /// virtual / VPN / cellular interfaces that the phone cannot reach.
+/// Only returns RFC 1918 private IPs — proxy Fake-IP ranges (198.18.0.0/15)
+/// are excluded because they're not directly reachable from the phone.
 fn ip_addr_local_ip() -> Option<String> {
     let output = std::process::Command::new("ip")
         .args(["-o", "-4", "addr", "show"])
@@ -278,11 +294,9 @@ fn ip_addr_local_ip() -> Option<String> {
         candidates.push((iface, ip.to_string()));
     }
 
-    // Multi-pass priority ranking (collect ALL candidates, don't short-circuit):
-    let mut preferred_private = None; // wlan/eth + 192.168/10.x
-    let mut any_private = None;       // non-virtual + 192.168/10.x
-    let mut preferred_any = None;     // wlan/eth + any IP
-    let mut any_non_virtual = None;   // non-virtual + any IP
+    // Priority ranking — only RFC 1918 private IPs are considered safe.
+    let mut preferred_private = None; // wlan/eth + private
+    let mut any_private = None;       // non-virtual + private
     for (iface, ip) in &candidates {
         let is_preferred = iface.starts_with("wlan")
             || iface.starts_with("eth")
@@ -290,7 +304,7 @@ fn ip_addr_local_ip() -> Option<String> {
             || iface.starts_with("enx")
             || iface.starts_with("wlp");
         let is_virtual = VIRTUAL_PREFIXES.iter().any(|p| iface.starts_with(p));
-        let is_private = ip.starts_with("192.168.") || ip.starts_with("10.");
+        let is_private = is_rfc1918_private(ip);
 
         if is_preferred && is_private && preferred_private.is_none() {
             preferred_private = Some(ip.clone());
@@ -298,19 +312,9 @@ fn ip_addr_local_ip() -> Option<String> {
         if !is_virtual && is_private && any_private.is_none() {
             any_private = Some(ip.clone());
         }
-        if is_preferred && preferred_any.is_none() {
-            preferred_any = Some(ip.clone());
-        }
-        if !is_virtual && any_non_virtual.is_none() {
-            any_non_virtual = Some(ip.clone());
-        }
     }
 
-    preferred_private
-        .or(any_private)
-        .or(preferred_any)
-        .or(any_non_virtual)
-        .or_else(|| candidates.into_iter().next().map(|(_, ip)| ip))
+    preferred_private.or(any_private)
 }
 
 /// Fast local IP detection via UDP socket connect (no traffic sent).
