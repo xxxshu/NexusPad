@@ -158,28 +158,22 @@ const VIRTUAL_PREFIXES: &[&str] = &[
 /// 4. UDP connect (unfiltered) — accept any non-loopback result as last resort.
 /// 5. "127.0.0.1" as absolute last resort.
 pub fn get_local_ip() -> String {
-    // 1) UDP connect trick — fastest and most reliable for proxy/VPN scenarios.
-    //    The kernel routing table reflects the actual network configuration
-    //    (including proxy TUN adapters and VPN gateways).
-    if let Some(ip) = udp_local_ip_fast() {
-        if !is_virtual_iface_ip(&ip) {
-            tracing::info!("get_local_ip via UDP (kernel routing): {}", ip);
-            return ip;
-        }
-        tracing::info!(
-            "get_local_ip: UDP returned {} but it's on a virtual/VPN interface, skipping",
-            ip
-        );
-    }
+    // 1) Use UDP connect as a "hint" — it's fast and reflects kernel routing,
+    //    but we MUST verify the result against real interfaces to avoid proxy/
+    //    VPN adapter IPs (e.g. 198.x.x.x from Clash/V2Ray TUN adapters).
+    let udp_ip = udp_local_ip_fast();
+    let mut udp_verified = false;
 
     // 2) Interface scan with timeout — finds real LAN addresses.
-    //    Collects ALL candidates and ranks them (doesn't return on first match).
+    //    If the UDP IP matches a real (non-virtual) interface, trust it.
+    //    Otherwise, rank candidates: preferred (wlan/eth) + private IP first.
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = std::thread::Builder::new()
         .name("local-ip-scan".into())
         .spawn(move || {
-            let result = (|| -> Option<String> {
+            let result = (|| -> Option<(String, bool)> {
                 let addrs = local_ip_address::list_afinet_netifas().ok()?;
+                let udp_ref = udp_ip.as_deref();
                 let mut preferred_private = None; // wlan/eth + 192.168/10.x
                 let mut any_private = None;        // non-virtual + 192.168/10.x
                 let mut preferred_any = None;      // wlan/eth + any IP
@@ -190,13 +184,21 @@ pub fn get_local_ip() -> String {
                         if s.starts_with("127.") || s.starts_with("169.254.") {
                             continue;
                         }
-                        let is_preferred = name.to_lowercase().starts_with("wlan")
-                            || name.to_lowercase().starts_with("eth")
-                            || name.to_lowercase().starts_with("wi-fi");
+                        let lower = name.to_lowercase();
+                        let is_preferred = lower.starts_with("wlan")
+                            || lower.starts_with("eth")
+                            || lower.starts_with("wi-fi");
                         let is_virtual = VIRTUAL_PREFIXES
                             .iter()
-                            .any(|p| name.to_lowercase().starts_with(p));
+                            .any(|p| lower.starts_with(p));
                         let is_private = s.starts_with("192.168.") || s.starts_with("10.");
+
+                        // If UDP IP matches a real (non-virtual) interface, it's
+                        // verified — the kernel uses this interface for routing
+                        // and the phone can reach it on the LAN.
+                        if Some(s.as_str()) == udp_ref && !is_virtual {
+                            return Some((s, true));
+                        }
 
                         if is_preferred && is_private && preferred_private.is_none() {
                             preferred_private = Some(s.clone());
@@ -216,11 +218,16 @@ pub fn get_local_ip() -> String {
                     .or(any_private)
                     .or(preferred_any)
                     .or(any_non_virtual)
+                    .map(|ip| (ip, false))
             })();
             let _ = tx.send(result);
         });
 
-    if let Ok(Some(ip)) = rx.recv_timeout(std::time::Duration::from_secs(2)) {
+    if let Ok(Some((ip, verified))) = rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        if verified {
+            tracing::info!("get_local_ip via UDP + interface verify: {}", ip);
+            return ip;
+        }
         tracing::info!("get_local_ip via interface scan: {}", ip);
         return ip;
     }
@@ -234,58 +241,16 @@ pub fn get_local_ip() -> String {
         return ip;
     }
 
-    // 4) UDP connect (unfiltered) — accept any non-loopback result.
+    // 4) Last resort — use whatever the kernel routing table says.
     if let Some(ip) = udp_local_ip_fast() {
         if !ip.starts_with("127.") {
-            tracing::warn!("get_local_ip via UDP fallback (unfiltered): {}", ip);
+            tracing::warn!("get_local_ip via UDP fallback (unverified): {}", ip);
             return ip;
         }
     }
 
-    // 5) Last resort
+    // 5) Absolute last resort
     "127.0.0.1".to_string()
-}
-
-/// Check if an IP address belongs to a known virtual / VPN interface by
-/// cross-referencing with the system's interface list.
-fn is_virtual_iface_ip(ip: &str) -> bool {
-    // Linux: check via `ip addr`
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(output) = std::process::Command::new("ip")
-            .args(["-o", "-4", "addr", "show"])
-            .output()
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let cols: Vec<&str> = line.split_whitespace().collect();
-                    if let (Some(&iface), Some(&addr)) = (cols.get(1), cols.get(3)) {
-                        if addr.split('/').next() == Some(ip) {
-                            return VIRTUAL_PREFIXES
-                                .iter()
-                                .any(|p| iface.starts_with(p));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Windows / macOS: check via local_ip_address interface names
-    #[cfg(not(target_os = "linux"))]
-    {
-        if let Ok(addrs) = local_ip_address::list_afinet_netifas() {
-            for (name, addr) in &addrs {
-                if addr.to_string() == ip {
-                    let lower = name.to_lowercase();
-                    return VIRTUAL_PREFIXES.iter().any(|p| lower.starts_with(p));
-                }
-            }
-        }
-    }
-    // If we can't determine, assume it's NOT virtual (be permissive).
-    // The interface enumeration methods will handle filtering.
-    false
 }
 
 /// Run `ip -o -4 addr show` and pick the best LAN address, filtering out
