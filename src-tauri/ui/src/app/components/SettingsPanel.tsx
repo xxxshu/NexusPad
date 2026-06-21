@@ -84,6 +84,7 @@ function GeneralTab() {
   const [imeKey, setImeKey] = useState("");
   const [imeCustom, setImeCustom] = useState("");
   const [imeStatus, setImeStatus] = useState("");
+  const [vigemInstalled, setVigemInstalled] = useState<boolean | null>(null);
 
   const inputStyle: React.CSSProperties = {
     background: "#fff",
@@ -114,6 +115,9 @@ function GeneralTab() {
     invoke("get_minimize_to_tray").then((enabled: any) => {
       setMinimizeToTray(!!enabled);
     }).catch(() => {});
+    invoke("check_vigem_installed").then((installed: any) => {
+      setVigemInstalled(!!installed);
+    }).catch(() => { setVigemInstalled(false); });
   }, []);
 
   // Port change handler
@@ -258,6 +262,52 @@ function GeneralTab() {
             try { await invoke("set_minimize_to_tray", { enable: v }); setMinimizeToTray(v); } catch {}
           }} />
         </Row>
+      </SectionCard>
+
+      <SectionCard>
+        <SectionLabel label="游戏手柄驱动" />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ color: "#003472", fontSize: 13, fontWeight: 500 }}>ViGEmBus 驱动</div>
+            <div style={{ color: "#5a8fb5", fontSize: 12, marginTop: 1 }}>让 NexusPad 创建虚拟手柄控制器</div>
+          </div>
+          {vigemInstalled === null ? (
+            <div style={{ fontSize: 12, color: "#5a8fb5" }}>检测中...</div>
+          ) : vigemInstalled ? (
+            <div style={{
+              background: "#dcfce7", border: "1px solid #86efac", borderRadius: 6,
+              color: "#16a34a", fontSize: 12, padding: "3px 10px", fontWeight: 600,
+            }}>
+              ✓ 已安装
+            </div>
+          ) : (
+            <div style={{
+              background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6,
+              color: "#dc2626", fontSize: 12, padding: "3px 10px", fontWeight: 600,
+            }}>
+              ✗ 未安装
+            </div>
+          )}
+        </div>
+        {!vigemInstalled && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+            <button
+              onClick={() => open("https://github.com/ViGEm/ViGEmBus/releases/latest")}
+              style={{
+                background: "#fff", border: "1px solid rgba(0,98,171,0.2)",
+                borderRadius: 7, color: "#0062AB", fontSize: 12,
+                padding: "6px 12px", cursor: "pointer", alignSelf: "flex-start",
+                display: "inline-flex", alignItems: "center", gap: 5,
+                fontFamily: "system-ui, sans-serif",
+              }}
+            >
+              下载 ViGEmBus
+            </button>
+            <div style={{ color: "#5a8fb5", fontSize: 11 }}>
+              安装后需要重启电脑才能生效
+            </div>
+          </div>
+        )}
       </SectionCard>
     </div>
   );

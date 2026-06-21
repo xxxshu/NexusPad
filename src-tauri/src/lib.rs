@@ -5,6 +5,7 @@ use tokio::sync::{broadcast, Mutex};
 use serde::Serialize;
 
 mod config;
+mod gamepad;
 mod input;
 mod platform;
 mod protocol;
@@ -253,6 +254,12 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Check if ViGEmBus driver is installed
+#[tauri::command]
+fn check_vigem_installed() -> bool {
+    gamepad::GamepadManager::is_installed()
+}
+
 /// Get whether autostart on boot is enabled
 #[tauri::command]
 fn get_autostart(app: tauri::AppHandle) -> bool {
@@ -391,6 +398,7 @@ pub fn run() {
             save_ime_config,
             check_port,
             app_version,
+            check_vigem_installed,
             get_autostart,
             set_autostart,
             get_minimize_to_tray,

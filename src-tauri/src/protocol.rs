@@ -38,6 +38,26 @@ pub enum ClientMsg {
     ApprovalResp { r: String },
     #[serde(rename = "auth")]
     Auth { pin: String },
+    /// Check if ViGEmBus driver is installed
+    #[serde(rename = "vigem")]
+    VigemCheck,
+    /// Request to create a virtual gamepad (t = "xbox" | "ps" | "custom")
+    #[serde(rename = "gc")]
+    GamepadConnect { t: String },
+    /// Gamepad state snapshot (axes + triggers + button bitmask)
+    #[serde(rename = "gp")]
+    GamepadState {
+        #[serde(default)] lx: f64,
+        #[serde(default)] ly: f64,
+        #[serde(default)] rx: f64,
+        #[serde(default)] ry: f64,
+        #[serde(default)] lt: f64,
+        #[serde(default)] rt: f64,
+        #[serde(default)] b: u32,
+    },
+    /// Request to destroy the virtual gamepad
+    #[serde(rename = "gd")]
+    GamepadDisconnect,
 }
 
 fn default_button() -> u8 { 1 }
@@ -60,4 +80,7 @@ pub enum ServerMsg {
     /// Push current IME status to client (sent on connect and after toggle)
     #[serde(rename = "ime_init")]
     ImeInit { status: String },
+    /// ViGEmBus driver detection result
+    #[serde(rename = "vigem")]
+    VigemStatus { installed: bool },
 }

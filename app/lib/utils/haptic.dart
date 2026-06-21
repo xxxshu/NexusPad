@@ -27,6 +27,12 @@ class Haptic {
   /// 按键震动 (15ms，与触控板 tap 一致)
   static Future<void> keyPress() => _vibrate(15);
 
+  /// 手柄按钮按下 (10ms，轻触感)
+  static Future<void> buttonPress() => _vibrate(10);
+
+  /// 摇杆到达边缘 (15ms)
+  static Future<void> stickEdge() => _vibrate(15);
+
   /// 滚动刻度震动 (8-20ms, 按强度缩放)
   /// [intensity] 0.0 ~ 1.0
   static Future<void> scrollTick(double intensity) {

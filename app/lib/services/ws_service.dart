@@ -33,6 +33,7 @@ class WsService extends ChangeNotifier {
   bool _hasControl = false;
   bool _hasEverControlled = false;
   String? _approvalIp;
+  bool _vigemInstalled = false;
 
   // Getters
   ConnState get state => _state;
@@ -42,6 +43,7 @@ class WsService extends ChangeNotifier {
   bool get hasEverControlled => _hasEverControlled;
   String? get approvalIp => _approvalIp;
   bool get isConnected => _state == ConnState.connected;
+  bool get vigemInstalled => _vigemInstalled;
 
   // =========================================================================
   // 连接管理
@@ -103,6 +105,11 @@ class WsService extends ChangeNotifier {
     _sendRaw(CApprovalResp(r).encode());
     _approvalIp = null;
     notifyListeners();
+  }
+
+  /// 请求检测 ViGEmBus 驱动状态
+  void requestVigemCheck() {
+    _sendRaw(CVigemCheck().encode());
   }
 
   /// 发送控制消息（带 hasControl 守卫）
@@ -186,6 +193,10 @@ class WsService extends ChangeNotifier {
 
       case SImeInit(:final status):
         _imeStatus = status.toLowerCase();
+        notifyListeners();
+
+      case SVigemStatus(:final installed):
+        _vigemInstalled = installed;
         notifyListeners();
 
       case SUnknown():

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../models/control_mode.dart';
 import '../services/ws_service.dart';
 import 'auth_screen.dart';
 
 /// QR 码扫描页
 class QRScanScreen extends StatefulWidget {
-  const QRScanScreen({super.key});
+  final ControlMode mode;
+  const QRScanScreen({super.key, required this.mode});
 
   @override
   State<QRScanScreen> createState() => _QRScanScreenState();
@@ -69,7 +71,7 @@ class _QRScanScreenState extends State<QRScanScreen> {
             _navigating = true;
             Navigator.of(context).pushReplacement(
               MaterialPageRoute(
-                builder: (_) => AuthScreen(wsService: _wsService),
+                builder: (_) => AuthScreen(wsService: _wsService, mode: widget.mode),
               ),
             );
           }

@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/control_mode.dart';
 import '../services/ws_service.dart';
+import 'gamepad_select_screen.dart';
 import 'touchpad_screen.dart';
 
 /// PIN 认证页
 class AuthScreen extends StatefulWidget {
   final WsService wsService;
+  final ControlMode mode;
 
-  const AuthScreen({super.key, required this.wsService});
+  const AuthScreen({super.key, required this.wsService, required this.mode});
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -36,14 +39,53 @@ class _AuthScreenState extends State<AuthScreen> {
 
     switch (ws.state) {
       case ConnState.connected:
-        // 认证成功，无动画瞬间切换到触控板（避免方向闪烁）
-        Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (_, a, b) => TouchpadScreen(wsService: ws),
-            transitionDuration: Duration.zero,
-            reverseTransitionDuration: Duration.zero,
-          ),
-        );
+        // 认证成功，根据模式跳转不同页面
+        if (widget.mode == ControlMode.gamepad) {
+          // 游戏手柄模式：先检测驱动，再跳转
+          ws.requestVigemCheck();
+          // 等待 vigem 检测结果（最多 500ms）
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (!mounted) return;
+            if (ws.vigemInstalled) {
+              Navigator.of(context).pushReplacement(
+                PageRouteBuilder(
+                  pageBuilder: (_, a, b) => GamepadSelectScreen(wsService: ws),
+                  transitionDuration: Duration.zero,
+                  reverseTransitionDuration: Duration.zero,
+                ),
+              );
+            } else {
+              // 驱动未安装，弹窗提示并返回首页
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('缺少驱动'),
+                  content: const Text('请先在电脑上安装 ViGEmBus 驱动，然后重启 NexusPad。\n\n可在设置面板中找到下载链接。'),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        ws.disconnect();
+                        Navigator.of(context).popUntil((route) => route.isFirst);
+                      },
+                      child: const Text('确定'),
+                    ),
+                  ],
+                ),
+              );
+            }
+          });
+        } else {
+          // 触控板模式：无动画瞬间切换
+          Navigator.of(context).pushReplacement(
+            PageRouteBuilder(
+              pageBuilder: (_, a, b) => TouchpadScreen(wsService: ws),
+              transitionDuration: Duration.zero,
+              reverseTransitionDuration: Duration.zero,
+            ),
+          );
+        }
         break;
       case ConnState.waitingApproval:
         setState(() {

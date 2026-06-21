@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../models/control_mode.dart';
-import 'qr_scan_screen.dart';
+import '../models/protocol.dart';
+import '../services/ws_service.dart';
+import '../utils/haptic.dart';
+import 'custom_layout_list_screen.dart';
+import 'gamepad_screen.dart';
 
-/// 模式选择首页（竖屏）
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+/// 手柄类型选择页（竖屏）
+class GamepadSelectScreen extends StatefulWidget {
+  final WsService wsService;
+  const GamepadSelectScreen({super.key, required this.wsService});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<GamepadSelectScreen> createState() => _GamepadSelectScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _GamepadSelectScreenState extends State<GamepadSelectScreen> {
   @override
   void initState() {
     super.initState();
@@ -23,80 +27,70 @@ class _HomeScreenState extends State<HomeScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
+  void _selectGamepad(String type) {
+    Haptic.tap();
+    widget.wsService.sendMessage(CGamepadConnect(type));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => GamepadScreen(wsService: widget.wsService, mode: type),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFeef4fd),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF1a2e4a)),
+        ),
+        title: const Text(
+          '选择手柄布局',
+          style: TextStyle(
+            color: Color(0xFF1a2e4a),
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        centerTitle: true,
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Logo
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF003472).withValues(alpha: 0.25),
-                        blurRadius: 20,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: Image.asset('assets/icon.png', width: 80, height: 80),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'NexusPad',
-                  style: TextStyle(
-                    color: Color(0xFF003472),
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  '手机变身电脑外设',
-                  style: TextStyle(
-                    color: Color(0xFF6e8aa8),
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 48),
-                // 触控板键盘
-                _ModeCard(
-                  icon: Icons.mouse,
-                  title: '触控板键盘',
-                  subtitle: '鼠标移动 · 点击 · 滚动 · 缩放',
-                  color: const Color(0xFF2395f3),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const QRScanScreen(mode: ControlMode.touchpad),
-                      ),
-                    );
-                  },
+                _GamepadCard(
+                  icon: Icons.gamepad,
+                  title: 'Xbox 360 Controller',
+                  subtitle: 'A B X Y · LB RB · 左右摇杆 · 十字键',
+                  color: const Color(0xFF107C10),
+                  onTap: () => _selectGamepad('xbox'),
                 ),
                 const SizedBox(height: 16),
-                // 游戏手柄
-                _ModeCard(
+                _GamepadCard(
                   icon: Icons.gamepad,
-                  title: '游戏手柄',
-                  subtitle: 'Xbox 360 · PS5 · 自定义布局',
-                  color: const Color(0xFF4a7c59),
+                  title: 'PS5 DualSense',
+                  subtitle: '× ○ □ △ · L1 R1 · 左右摇杆 · 十字键',
+                  color: const Color(0xFF003087),
+                  onTap: () => _selectGamepad('ps'),
+                ),
+                const SizedBox(height: 16),
+                _GamepadCard(
+                  icon: Icons.tune,
+                  title: '自定义布局',
+                  subtitle: '创建你自己的手柄方案',
+                  color: const Color(0xFF6e8aa8),
                   onTap: () {
+                    Haptic.tap();
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => const QRScanScreen(mode: ControlMode.gamepad),
+                        builder: (_) => CustomLayoutListScreen(wsService: widget.wsService),
                       ),
                     );
                   },
@@ -110,14 +104,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class _ModeCard extends StatelessWidget {
+class _GamepadCard extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
   final Color color;
   final VoidCallback onTap;
 
-  const _ModeCard({
+  const _GamepadCard({
     required this.icon,
     required this.title,
     required this.subtitle,

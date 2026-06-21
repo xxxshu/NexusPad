@@ -124,6 +124,39 @@ class CImeRefresh extends ClientMsg {
   Map<String, dynamic> toJson() => {'a': 'ime_refresh'};
 }
 
+/// 检测 ViGEmBus 驱动状态
+class CVigemCheck extends ClientMsg {
+  @override
+  Map<String, dynamic> toJson() => {'a': 'vigem'};
+}
+
+/// 请求创建虚拟手柄: t = "xbox" | "ps" | "custom"
+class CGamepadConnect extends ClientMsg {
+  final String t;
+  CGamepadConnect(this.t);
+  @override
+  Map<String, dynamic> toJson() => {'a': 'gc', 't': t};
+}
+
+/// 手柄状态快照 (摇杆+扳机+按钮位掩码)
+class CGamepadState extends ClientMsg {
+  final double lx, ly, rx, ry; // -1.0 ~ 1.0
+  final double lt, rt;         // 0.0 ~ 1.0
+  final int b;                 // 按钮位掩码
+  CGamepadState(this.lx, this.ly, this.rx, this.ry, this.lt, this.rt, this.b);
+  @override
+  Map<String, dynamic> toJson() => {
+    'a': 'gp', 'lx': lx, 'ly': ly, 'rx': rx, 'ry': ry,
+    'lt': lt, 'rt': rt, 'b': b,
+  };
+}
+
+/// 销毁虚拟手柄
+class CGamepadDisconnect extends ClientMsg {
+  @override
+  Map<String, dynamic> toJson() => {'a': 'gd'};
+}
+
 // ============================================================================
 // ServerMsg — 从服务端接收的消息
 // ====================================================================
@@ -144,6 +177,8 @@ sealed class ServerMsg {
         return SAuthFail();
       case 'ime_init':
         return SImeInit(status: json['status'] as String? ?? 'EN');
+      case 'vigem':
+        return SVigemStatus(installed: json['installed'] as bool? ?? false);
       default:
         return SUnknown(json['a'] as String? ?? 'unknown');
     }
@@ -178,6 +213,12 @@ class SAuthFail extends ServerMsg {}
 class SImeInit extends ServerMsg {
   final String status; // "EN" | "ZH"
   SImeInit({required this.status});
+}
+
+/// ViGEmBus 驱动检测结果
+class SVigemStatus extends ServerMsg {
+  final bool installed;
+  SVigemStatus({required this.installed});
 }
 
 /// 未知消息类型

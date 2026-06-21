@@ -18,6 +18,7 @@ use anyhow::Result;
 use tauri::Emitter;
 use tracing::{info, warn};
 
+use crate::gamepad::GamepadManager;
 use crate::input::InputSimulator;
 use crate::platform::{self, PlatformHandler};
 use crate::protocol::{ClientMsg, ServerMsg};
@@ -65,6 +66,8 @@ pub struct ServerState {
     pub app_handle: Option<tauri::AppHandle>,
     /// Last known IME status (for background monitor diff)
     pub last_ime_status: Arc<Mutex<String>>,
+    /// Virtual gamepad manager (ViGEmBus)
+    pub gamepad: Arc<Mutex<GamepadManager>>,
 }
 
 /// Generate a random 6-digit PIN
@@ -96,6 +99,7 @@ impl ServerState {
             frontend_dir,
             app_handle,
             last_ime_status: Arc::new(Mutex::new("EN".to_string())),
+            gamepad: Arc::new(Mutex::new(GamepadManager::new())),
         }
     }
 
@@ -713,6 +717,12 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
     state.send_event(format!("❌ {} 已断开", addr_str));
     info!("Client disconnected: {}", addr_str);
 
+    // Destroy virtual gamepad when controller disconnects
+    {
+        let mut gp = state.gamepad.lock().await;
+        gp.destroy();
+    }
+
     if was_active {
         // Active controller disconnected → STOP → START
         state.emit_gui_event("device-disconnected", serde_json::json!({
@@ -799,6 +809,48 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
         }
         ClientMsg::Auth { .. } => {
             // Auth handled in connection setup, ignore here
+            return;
+        }
+        ClientMsg::VigemCheck => {
+            let installed = GamepadManager::is_installed();
+            info!("ViGEm check from {}: installed={}", addr, installed);
+            let msg = serde_json::json!({"a": "vigem", "installed": installed}).to_string();
+            drop(input);
+            state.send_to_active(&msg).await;
+            return;
+        }
+        ClientMsg::GamepadConnect { t } => {
+            info!("Gamepad connect from {}: type={}", addr, t);
+            drop(input);
+            let mut gp = state.gamepad.lock().await;
+            let result = match t.as_str() {
+                "xbox" => gp.create_xbox(),
+                "ps" => gp.create_ds4(),
+                _ => {
+                    warn!("Unknown gamepad type: {}", t);
+                    return;
+                }
+            };
+            if let Err(e) = result {
+                warn!("Failed to create gamepad: {}", e);
+            }
+            return;
+        }
+        ClientMsg::GamepadState { lx, ly, rx, ry, lt, rt, b } => {
+            let mut gp = state.gamepad.lock().await;
+            if let Err(e) = gp.update(lx, ly, rx, ry, lt, rt, b) {
+                // Only log occasionally to avoid spam
+                if rand::random::<u8>() < 5 {
+                    warn!("Gamepad update error: {}", e);
+                }
+            }
+            return;
+        }
+        ClientMsg::GamepadDisconnect => {
+            info!("Gamepad disconnect from {}", addr);
+            drop(input);
+            let mut gp = state.gamepad.lock().await;
+            gp.destroy();
             return;
         }
     };

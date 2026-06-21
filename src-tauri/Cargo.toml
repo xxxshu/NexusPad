@@ -26,6 +26,9 @@ enigo = { version = "0.6", features = ["serde"] }
 arboard = "3"
 rand = "0.9"
 
+[target.'cfg(windows)'.dependencies]
+vigem-client = "0.1"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
