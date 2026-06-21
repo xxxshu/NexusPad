@@ -63,6 +63,8 @@ pub struct ServerState {
     pub frontend_dir: PathBuf,
     /// Tauri app handle for emitting events to the GUI
     pub app_handle: Option<tauri::AppHandle>,
+    /// Last known IME status (for background monitor diff)
+    pub last_ime_status: Arc<Mutex<String>>,
 }
 
 /// Generate a random 6-digit PIN
@@ -93,6 +95,7 @@ impl ServerState {
             event_tx,
             frontend_dir,
             app_handle,
+            last_ime_status: Arc::new(Mutex::new("EN".to_string())),
         }
     }
 
@@ -113,8 +116,31 @@ impl ServerState {
     /// Read current IME status and push it to the active controller.
     pub async fn push_ime_status(&self) {
         let status = self.platform.get_ime_status();
+        // Update cached status so the monitor doesn't re-push the same value
+        *self.last_ime_status.lock().await = status.clone();
         let msg = serde_json::to_string(&ServerMsg::ImeInit { status }).unwrap();
         self.send_to_active(&msg).await;
+    }
+
+    /// Background task: poll IME status every 200ms, push to controller on change.
+    /// This catches IME changes from ANY source: window focus, physical keyboard, etc.
+    pub async fn run_ime_monitor(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            // Only poll when there's an active controller
+            let has_active = self.active_ws.lock().await.is_some();
+            if !has_active { continue; }
+
+            let current = self.platform.get_ime_status();
+            let mut last = self.last_ime_status.lock().await;
+            if current != *last {
+                info!("IME state changed: {} → {}", *last, current);
+                *last = current.clone();
+                let msg = serde_json::to_string(&ServerMsg::ImeInit { status: current }).unwrap();
+                drop(last); // release lock before async send
+                self.send_to_active(&msg).await;
+            }
+        }
     }
 
     /// Emit a Tauri event to the GUI frontend
@@ -410,6 +436,9 @@ pub async fn start_server(
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     info!("Server listening on {}", addr);
+
+    // Start background IME state monitor (polls every 200ms, pushes on change)
+    tokio::spawn(state.clone().run_ime_monitor());
 
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
