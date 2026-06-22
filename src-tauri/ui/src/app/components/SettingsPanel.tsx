@@ -380,6 +380,8 @@ function GeneralTab() {
     </div>
   );
 }
+
+function AboutTab() {
   const [version, setVersion] = useState("0.2.0");
   const [anonymous, setAnonymous] = useState(false);
   const [contact, setContact] = useState("");
