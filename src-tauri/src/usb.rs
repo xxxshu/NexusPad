@@ -75,17 +75,30 @@ fn is_aoa_pid(pid: u16) -> bool {
 /// 扫描已连接的 USB 设备，寻找尚未进入 AOA 模式的 Android 设备
 fn find_android_device() -> Result<Option<(rusb::Device<rusb::GlobalContext>, String)>> {
     let devices = rusb::devices()?;
+    let mut found_any = false;
     for device in devices.iter() {
         let desc = match device.device_descriptor() {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(e) => {
+                warn!("USB: failed to read device descriptor: {}", e);
+                continue;
+            }
         };
         let vid = desc.vendor_id();
-        if ANDROID_VENDOR_IDS.contains(&vid) && !is_aoa_pid(desc.product_id()) {
-            let product = format!("Android {:04X}:{:04X}", vid, desc.product_id());
-            info!("Found Android device: {}", product);
+        let pid = desc.product_id();
+        // 记录所有 USB 设备（调试用）
+        if vid != 0 && pid != 0 {
+            info!("USB device: {:04X}:{:04X} (class={:02X})", vid, pid, desc.class_code());
+        }
+        if ANDROID_VENDOR_IDS.contains(&vid) && !is_aoa_pid(pid) {
+            let product = format!("Android {:04X}:{:04X}", vid, pid);
+            info!("Found Android device: {} — attempting AOA handshake", product);
+            found_any = true;
             return Ok(Some((device, product)));
         }
+    }
+    if !found_any {
+        info!("USB: no Android devices found (scanned {} devices)", devices.len());
     }
     Ok(None)
 }
@@ -163,7 +176,16 @@ fn start_accessory(handle: &rusb::DeviceHandle<rusb::GlobalContext>) -> Result<u
 fn perform_aoa_handshake(
     device: &rusb::Device<rusb::GlobalContext>,
 ) -> Result<()> {
-    let mut handle = device.open()?;
+    let handle = device.open().map_err(|e| {
+        warn!("AOA handshake: failed to open device — {}", e);
+        match e {
+            rusb::Error::Access => anyhow!(
+                "USB 驱动权限不足。请安装 WinUSB 驱动（使用 Zadig 工具）。错误: {}", e
+            ),
+            rusb::Error::NoDevice => anyhow!("USB 设备已断开: {}", e),
+            _ => anyhow!("无法打开 USB 设备: {}", e),
+        }
+    })?;
 
     // 某些设备需要先 detach kernel driver
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -541,29 +563,43 @@ async fn handle_aoa_device(
 
 /// 检测 USB 驱动是否可用
 ///
-/// 尝试 rusb 枚举设备并打开，成功则驱动已安装
+/// 检查 rusb 是否能枚举设备，以及能否打开 Android/AOA 设备
 pub fn check_usb_driver() -> bool {
     match rusb::devices() {
         Ok(devices) => {
-            // rusb 能枚举设备说明 libusb 工作正常
-            // 进一步检查是否能找到 Android/AOA 设备
+            let mut found_android = false;
             for device in devices.iter() {
-                if let Ok(desc) = device.device_descriptor() {
-                    let vid = desc.vendor_id();
-                    let pid = desc.product_id();
-                    if ANDROID_VENDOR_IDS.contains(&vid) || is_aoa_pid(pid) {
-                        // 尝试打开设备
-                        match device.open() {
-                            Ok(_) => return true,
-                            Err(rusb::Error::Access) => return false, // 驱动问题
-                            Err(_) => continue,
+                let desc = match device.device_descriptor() {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let vid = desc.vendor_id();
+                let pid = desc.product_id();
+                if vid == 0 { continue; }
+                if ANDROID_VENDOR_IDS.contains(&vid) || is_aoa_pid(pid) {
+                    found_android = true;
+                    // 尝试打开设备——成功说明 WinUSB 驱动已装
+                    match device.open() {
+                        Ok(_) => {
+                            info!("USB driver check: device {:04X}:{:04X} opened OK", vid, pid);
+                            return true;
+                        }
+                        Err(e) => {
+                            warn!("USB driver check: device {:04X}:{:04X} open failed: {}", vid, pid, e);
+                            return false; // 找到设备但打不开 = 驱动问题
                         }
                     }
                 }
             }
-            // 没有找到设备，但 libusb 本身可用
+            // 没有找到 Android 设备，但 rusb 本身可用（驱动正常）
+            if !found_android {
+                info!("USB driver check: rusb OK but no Android devices connected");
+            }
             true
         }
-        Err(_) => false, // libusb 不可用
+        Err(e) => {
+            warn!("USB driver check: rusb not available: {}", e);
+            false // libusb 本身不可用
+        }
     }
 }

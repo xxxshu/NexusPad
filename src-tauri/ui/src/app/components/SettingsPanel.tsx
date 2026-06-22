@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Keyboard, Github, ScrollText } from "lucide-react";
+import { Keyboard, Github, ScrollText, Usb, Bluetooth } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 
@@ -85,6 +85,7 @@ function GeneralTab() {
   const [imeCustom, setImeCustom] = useState("");
   const [imeStatus, setImeStatus] = useState("");
   const [vigemInstalled, setVigemInstalled] = useState<boolean | null>(null);
+  const [usbDriverOk, setUsbDriverOk] = useState<boolean | null>(null);
 
   const inputStyle: React.CSSProperties = {
     background: "#fff",
@@ -118,6 +119,9 @@ function GeneralTab() {
     invoke("check_vigem_installed").then((installed: any) => {
       setVigemInstalled(!!installed);
     }).catch(() => { setVigemInstalled(false); });
+    invoke("check_usb_driver").then((ok: any) => {
+      setUsbDriverOk(!!ok);
+    }).catch(() => { setUsbDriverOk(false); });
   }, []);
 
   // Port change handler
@@ -309,11 +313,73 @@ function GeneralTab() {
           </div>
         )}
       </SectionCard>
+
+      <SectionCard>
+        <SectionLabel label="USB 连接驱动" />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ color: "#003472", fontSize: 13, fontWeight: 500 }}>WinUSB 驱动</div>
+            <div style={{ color: "#5a8fb5", fontSize: 12, marginTop: 1 }}>让 NexusPad 通过 USB 线连接手机（AOA 协议）</div>
+          </div>
+          {usbDriverOk === null ? (
+            <div style={{ fontSize: 12, color: "#5a8fb5" }}>检测中...</div>
+          ) : usbDriverOk ? (
+            <div style={{
+              background: "#dcfce7", border: "1px solid #86efac", borderRadius: 6,
+              color: "#16a34a", fontSize: 12, padding: "3px 10px", fontWeight: 600,
+            }}>
+              ✓ 可用
+            </div>
+          ) : (
+            <div style={{
+              background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6,
+              color: "#dc2626", fontSize: 12, padding: "3px 10px", fontWeight: 600,
+            }}>
+              ✗ 需要安装
+            </div>
+          )}
+        </div>
+        {!usbDriverOk && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+            <div style={{ color: "#5a8fb5", fontSize: 12 }}>
+              USB 连接需要 WinUSB 驱动。请使用 Zadig 工具为手机安装 WinUSB 驱动：
+            </div>
+            <ol style={{ color: "#5a8fb5", fontSize: 12, margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+              <li>用 USB 线连接手机到电脑</li>
+              <li>打开 Zadig（以管理员身份运行）</li>
+              <li>选择手机的 USB 设备（Android Device）</li>
+              <li>将驱动替换为 WinUSB</li>
+              <li>点击 "Replace Driver" 安装</li>
+            </ol>
+            <button
+              onClick={() => open("https://zadig.akeo.ie/")}
+              style={{
+                background: "#fff", border: "1px solid rgba(0,98,171,0.2)",
+                borderRadius: 7, color: "#0062AB", fontSize: 12,
+                padding: "6px 12px", cursor: "pointer", alignSelf: "flex-start",
+                display: "inline-flex", alignItems: "center", gap: 5,
+                fontFamily: "system-ui, sans-serif",
+              }}
+            >
+              下载 Zadig
+            </button>
+            <button
+              onClick={() => invoke("check_usb_driver").then((ok: any) => setUsbDriverOk(!!ok)).catch(() => setUsbDriverOk(false))}
+              style={{
+                background: "#08A1F5", border: "none",
+                borderRadius: 7, color: "#fff", fontSize: 12,
+                padding: "6px 12px", cursor: "pointer", alignSelf: "flex-start",
+                fontFamily: "system-ui, sans-serif", fontWeight: 600,
+              }}
+            >
+              重新检测
+            </button>
+          </div>
+        )}
+      </SectionCard>
     </div>
   );
 }
-
-function AboutTab() {
   const [version, setVersion] = useState("0.2.0");
   const [anonymous, setAnonymous] = useState(false);
   const [contact, setContact] = useState("");

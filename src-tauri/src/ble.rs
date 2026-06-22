@@ -95,23 +95,25 @@ async fn run_windows_ble_server(
     let provider = provider_result.ServiceProvider()?;
     info!("BLE: service provider created");
 
-    // 2. 创建 TX Characteristic (Notify)
+    // 2. 创建 TX Characteristic (Notify) — 不要求加密，避免触发配对
     let tx_guid = parse_guid(CHAR_TX_UUID);
     let tx_params = GattLocalCharacteristicParameters::new()?;
     tx_params.SetCharacteristicProperties(GattCharacteristicProperties::Notify)?;
+    tx_params.SetReadProtectionLevel(GattProtectionLevel::Plain)?;
     let tx_result = provider.Service()?.CreateCharacteristicAsync(tx_guid, &tx_params)?.get()?;
     let tx_char = tx_result.Characteristic()?;
-    info!("BLE: TX characteristic created (Notify)");
+    info!("BLE: TX characteristic created (Notify, Plain)");
 
-    // 3. 创建 RX Characteristic (WriteWithoutResponse)
+    // 3. 创建 RX Characteristic (WriteWithoutResponse) — 不要求加密
     let rx_guid = parse_guid(CHAR_RX_UUID);
     let rx_params = GattLocalCharacteristicParameters::new()?;
     rx_params.SetCharacteristicProperties(
         GattCharacteristicProperties::WriteWithoutResponse,
     )?;
+    rx_params.SetWriteProtectionLevel(GattProtectionLevel::Plain)?;
     let rx_result = provider.Service()?.CreateCharacteristicAsync(rx_guid, &rx_params)?.get()?;
     let rx_char = rx_result.Characteristic()?;
-    info!("BLE: RX characteristic created (WriteWithoutResponse)");
+    info!("BLE: RX characteristic created (WriteWithoutResponse, Plain)");
 
     // 4. 监听 RX 写入事件
     let state_write = state.clone();

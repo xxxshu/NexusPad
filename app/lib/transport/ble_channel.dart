@@ -76,7 +76,7 @@ class BleChannel implements TransportChannel {
 
   /// 连接到指定的 BLE 设备
   ///
-  /// 流程: 连接 → 发现 Service → 订阅 TX Notify → 准备 RX WriteNoRsp
+  /// 流程: 连接 → 等待配对稳定 → 发现 Service → 订阅 TX Notify
   Future<void> connectDevice(BluetoothDevice device) async {
     _state = TransportState.connecting;
     _controller.add(TextMessage('{"state":"connecting"}'));
@@ -84,20 +84,32 @@ class BleChannel implements TransportChannel {
     try {
       _device = device;
 
-      // 连接设备
+      // 连接设备 (autoConnect=true 以容忍配对过程中的短暂断开)
       await device.connect(
-        timeout: const Duration(seconds: 10),
-        autoConnect: false,
+        timeout: const Duration(seconds: 15),
+        autoConnect: true,
       );
 
-      // 请求更大的 MTU (BLE 4.2+ 支持到 512)
+      // 等待配对过程完成和连接稳定
+      // Android BLE 配对弹窗会导致短暂断开重连
+      await Future.delayed(const Duration(seconds: 2));
+
+      // 再次检查连接状态
+      final isConnected = device.isConnected;
+      if (!isConnected) {
+        throw Exception('蓝牙连接已断开，请重试');
+      }
+
+      // 请求更大的 MTU（非必须，失败不影响连接）
       try {
-        final mtuResult = await device.requestMtu(512);
+        final mtuResult = await device.requestMtu(247);
         _mtu = mtuResult;
       } catch (_) {
-        // MTU 请求失败，使用默认值
-        _mtu = 23;
+        _mtu = 23; // 使用默认 MTU
       }
+
+      // 等待 MTU 协商完成
+      await Future.delayed(const Duration(milliseconds: 500));
 
       // 发现服务
       final services = await device.discoverServices();
@@ -124,6 +136,13 @@ class BleChannel implements TransportChannel {
       _notifySub = _txChar!.lastValueStream.listen((data) {
         if (data.isNotEmpty) {
           _controller.add(BinaryMessage(Uint8List.fromList(data)));
+        }
+      });
+
+      // 监听连接断开事件
+      device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected && _state == TransportState.connected) {
+          _state = TransportState.disconnected;
         }
       });
 
