@@ -27,6 +27,16 @@ const ANDROID_VENDOR_IDS: &[u16] = &[
     0x109B, // Hisense (Nexus 6)
     0x17EF, // Lenovo
     0x0E8D, // MediaTek (various Chinese brands)
+    0x22D9, // OPPO / OnePlus / Realme
+    0x2A70, // OnePlus (alternate)
+    0x1D91, // Vivo
+    0x05C6, // Qualcomm (many Android devices)
+    0x2A45, // Meizu
+    0x271D, // Xiaomi (alternate)
+    0x29A9, // ZTE (alternate)
+    0x0FCE, // Sony Ericsson / Sony
+    0x0489, // Foxconn (some Xiaomi)
+    0x2C02, // Fairphone
 ];
 
 /// AOA Product IDs (设备进入 Accessory 模式后)
@@ -176,16 +186,45 @@ fn start_accessory(handle: &rusb::DeviceHandle<rusb::GlobalContext>) -> Result<u
 fn perform_aoa_handshake(
     device: &rusb::Device<rusb::GlobalContext>,
 ) -> Result<()> {
-    let handle = device.open().map_err(|e| {
-        warn!("AOA handshake: failed to open device — {}", e);
-        match e {
-            rusb::Error::Access => anyhow!(
-                "USB 驱动权限不足。请安装 WinUSB 驱动（使用 Zadig 工具）。错误: {}", e
-            ),
-            rusb::Error::NoDevice => anyhow!("USB 设备已断开: {}", e),
-            _ => anyhow!("无法打开 USB 设备: {}", e),
+    // 尝试打开设备——可能因 Windows MTP/ADB 驱动占用而失败
+    let handle = match device.open() {
+        Ok(h) => h,
+        Err(rusb::Error::Access) => {
+            // 回退：尝试逐个接口打开
+            let desc = device.device_descriptor()?;
+            for iface_idx in 0..desc.num_configurations() {
+                if let Ok(config) = device.config_descriptor(iface_idx) {
+                    for iface in config.interfaces() {
+                        for iface_desc in iface.descriptors() {
+                            if let Ok(h) = device.open() {
+                                // 尝试 claim this interface
+                                let _ = h.claim_interface(iface_desc.interface_number());
+                                info!("AOA: opened device via interface {}", iface_desc.interface_number());
+                                return perform_aoa_with_handle(&h);
+                            }
+                        }
+                    }
+                }
+            }
+            warn!("AOA handshake: failed to open device — Access denied");
+            warn!("  → 请使用 Zadig 为手机 (VID:22D9) 安装 WinUSB 驱动");
+            warn!("  → 或者关闭 MTP 文件传输模式（仅保留 USB 调试）");
+            return Err(anyhow!(
+                "USB 驱动权限不足。请使用 Zadig 安装 WinUSB 驱动，或关闭手机的 MTP 文件传输模式。"
+            ));
         }
-    })?;
+        Err(e) => {
+            warn!("AOA handshake: failed to open device — {}", e);
+            return Err(anyhow!("无法打开 USB 设备: {}", e));
+        }
+    };
+
+    perform_aoa_with_handle(&handle)
+}
+
+fn perform_aoa_with_handle(
+    handle: &rusb::DeviceHandle<rusb::GlobalContext>,
+) -> Result<()> {
 
     // 某些设备需要先 detach kernel driver
     #[cfg(any(target_os = "linux", target_os = "macos"))]
