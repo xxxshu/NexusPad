@@ -470,7 +470,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
         return;
       }
 
-      // 3. USB 免认证，直接进入 HomeScreen
+      // 3. USB 免认证，注入 UsbChannel 到 WsService 并赋予控制权
+      _wsService.connectTransport(_usbChannel);
+
       if (mounted) {
         setState(() { _usbConnecting = false; });
         Navigator.of(context).push(
@@ -663,7 +665,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     try {
       await _bleChannel.connectDevice(device);
 
-      // BLE 免认证，直接进入 HomeScreen
+      // BLE 免认证，将 BleChannel 注入 WsService 并直接赋予控制权
+      _wsService.connectTransport(_bleChannel);
+
       if (mounted) {
         setState(() { _bleConnecting = false; });
         Navigator.of(context).push(

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
+import '../codec/frame_types.dart';
+import '../codec/tlv_codec.dart';
 import '../models/protocol.dart';
 import '../transport/transport.dart';
 import '../transport/ws_channel.dart';
@@ -20,7 +22,7 @@ enum ConnState {
 ///
 /// 当前使用 WebSocket 通道，后续可切换到 USB/BLE
 class WsService extends ChangeNotifier {
-  WsChannel? _transport;
+  TransportChannel? _transport;
   StreamSubscription? _msgSub;
   Timer? _reconnectTimer;
 
@@ -62,11 +64,12 @@ class WsService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _transport = WsChannel();
-      _transport!.onDisconnect = _onTransportDone;
-      _msgSub = _transport!.onMessage.listen(_onMessage);
+      final ws = WsChannel();
+      ws.onDisconnect = _onTransportDone;
+      _transport = ws;
+      _msgSub = ws.onMessage.listen(_onMessage);
 
-      await _transport!.connect(host, port);
+      await ws.connect(host, port);
       // 连接成功后等待服务端推送 auth_required
     } catch (e) {
       _state = ConnState.error;
@@ -85,6 +88,27 @@ class WsService extends ChangeNotifier {
     _state = ConnState.disconnected;
     _hasControl = false;
     _approvalIp = null;
+    notifyListeners();
+  }
+
+  // =========================================================================
+  // 外部传输通道（USB/BLE 免认证直连）
+  // =========================================================================
+
+  /// 通过外部传输通道连接（USB/BLE），跳过认证直接获得控制权
+  ///
+  /// 与 [connect] 不同，此方法不创建内部 WsChannel，
+  /// 而是使用调用方提供的已连接的 [channel]。
+  void connectTransport(TransportChannel channel) {
+    _closeTransport();
+    _transport = channel;
+    _msgSub = channel.onMessage.listen(_onMessage);
+
+    // USB/BLE 免认证，直接赋予控制权
+    _hasControl = true;
+    _hasEverControlled = true;
+    _state = ConnState.connected;
+    _errorMessage = null;
     notifyListeners();
   }
 
@@ -157,9 +181,20 @@ class WsService extends ChangeNotifier {
         final serverMsg = ServerMsg.fromJson(json);
         _handleServerMsg(serverMsg);
 
-      case BinaryMessage():
-        // 当前服务端下行只发 JSON 文本帧，二进制下行（震动等）后续实现
-        break;
+      case BinaryMessage(:final data):
+        // 解码 TLV 帧（USB/BLE 通道的下行消息）
+        final decoded = TlvCodec.decode(data);
+        if (decoded == null) return;
+        if (decoded.type == FrameType.control || decoded.type == FrameType.system) {
+          // 控制帧/系统帧：payload 是 JSON
+          try {
+            final jsonStr = String.fromCharCodes(decoded.payload);
+            final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+            final serverMsg = ServerMsg.fromJson(json);
+            _handleServerMsg(serverMsg);
+          } catch (_) {}
+        }
+        // 其他帧类型（震动等）后续实现
     }
   }
 
