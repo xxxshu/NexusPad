@@ -72,7 +72,7 @@ async fn run_windows_ble_server(
     use windows::Foundation::TypedEventHandler;
     use windows::Storage::Streams::DataReader;
 
-    use crate::codec::{self, TlvFrame, FRAME_CONTROL, FRAME_HEARTBEAT, FRAME_INPUT};
+    use crate::codec::{self, TlvFrame, FRAME_CONTROL, FRAME_GAMEPAD, FRAME_HEARTBEAT, FRAME_INPUT, GamepadStateBinary};
     use crate::protocol::ClientMessage;
 
     // Helper: parse UUID string to GUID
@@ -133,6 +133,10 @@ async fn run_windows_ble_server(
             // 解码 TLV 帧并分发到消息处理器
             if let Some((frame, _)) = TlvFrame::decode(&buf) {
                 let msg = match frame.frame_type {
+                    FRAME_GAMEPAD => {
+                        GamepadStateBinary::decode(&frame.payload)
+                            .map(ClientMessage::BinaryGamepad)
+                    }
                     FRAME_INPUT => {
                         codec::decode_input_move(&frame.payload)
                             .map(|(x, y)| ClientMessage::BinaryMove { x, y })
