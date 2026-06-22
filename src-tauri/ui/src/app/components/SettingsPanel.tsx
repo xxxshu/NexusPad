@@ -86,6 +86,7 @@ function GeneralTab() {
   const [imeStatus, setImeStatus] = useState("");
   const [vigemInstalled, setVigemInstalled] = useState<boolean | null>(null);
   const [usbDriverOk, setUsbDriverOk] = useState<boolean | null>(null);
+  const [usbDiag, setUsbDiag] = useState<string | null>(null);
 
   const inputStyle: React.CSSProperties = {
     background: "#fff",
@@ -374,6 +375,27 @@ function GeneralTab() {
             >
               重新检测
             </button>
+            <button
+              onClick={() => invoke("diagnose_usb").then((r: any) => setUsbDiag(String(r))).catch((e) => setUsbDiag("诊断失败: " + e))}
+              style={{
+                background: "#fff", border: "1px solid rgba(0,98,171,0.2)",
+                borderRadius: 7, color: "#0062AB", fontSize: 12,
+                padding: "6px 12px", cursor: "pointer", alignSelf: "flex-start",
+                fontFamily: "system-ui, sans-serif",
+              }}
+            >
+              USB 诊断
+            </button>
+            {usbDiag && (
+              <pre style={{
+                background: "#fff", border: "1px solid rgba(0,98,171,0.15)",
+                borderRadius: 7, padding: "10px 12px", fontSize: 11,
+                color: "#003472", whiteSpace: "pre-wrap", lineHeight: 1.6,
+                fontFamily: "Consolas, monospace", maxHeight: 200, overflow: "auto",
+              }}>
+                {usbDiag}
+              </pre>
+            )}
           </div>
         )}
       </SectionCard>

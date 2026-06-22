@@ -76,7 +76,7 @@ class BleChannel implements TransportChannel {
 
   /// 连接到指定的 BLE 设备
   ///
-  /// 流程: 连接 → 等待配对稳定 → 发现 Service → 订阅 TX Notify
+  /// 流程: 连接 → 发现 Service → 订阅 TX Notify
   Future<void> connectDevice(BluetoothDevice device) async {
     _state = TransportState.connecting;
     _controller.add(TextMessage('{"state":"connecting"}'));
@@ -84,32 +84,16 @@ class BleChannel implements TransportChannel {
     try {
       _device = device;
 
-      // 连接设备 (autoConnect=true 以容忍配对过程中的短暂断开)
+      // 连接设备 (autoConnect=false: 直连，速度更快)
+      // 配对弹窗可能导致短暂断开，由 UI 层提示用户重试
       await device.connect(
         timeout: const Duration(seconds: 15),
-        autoConnect: true,
+        autoConnect: false,
       );
 
-      // 等待配对过程完成和连接稳定
-      // Android BLE 配对弹窗会导致短暂断开重连
-      await Future.delayed(const Duration(seconds: 2));
-
-      // 再次检查连接状态
-      final isConnected = device.isConnected;
-      if (!isConnected) {
-        throw Exception('蓝牙连接已断开，请重试');
-      }
-
-      // 请求更大的 MTU（非必须，失败不影响连接）
-      try {
-        final mtuResult = await device.requestMtu(247);
-        _mtu = mtuResult;
-      } catch (_) {
-        _mtu = 23; // 使用默认 MTU
-      }
-
-      // 等待 MTU 协商完成
-      await Future.delayed(const Duration(milliseconds: 500));
+      // 不请求自定义 MTU — flutter_blue_plus 中 autoConnect 与 MTU 不兼容
+      // 使用默认 MTU 23 字节，我们的 TLV 帧（手柄 16B + 头 3B = 19B）可以容纳
+      _mtu = 23;
 
       // 发现服务
       final services = await device.discoverServices();

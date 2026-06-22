@@ -283,6 +283,12 @@ fn check_usb_driver() -> bool {
     usb::check_usb_driver()
 }
 
+/// USB 诊断：枚举所有 USB 设备，返回诊断信息
+#[tauri::command]
+fn diagnose_usb() -> String {
+    usb::diagnose_usb()
+}
+
 /// Get whether autostart on boot is enabled
 #[tauri::command]
 fn get_autostart(app: tauri::AppHandle) -> bool {
@@ -423,6 +429,7 @@ pub fn run() {
             app_version,
             check_vigem_installed,
             check_usb_driver,
+            diagnose_usb,
             get_autostart,
             set_autostart,
             get_minimize_to_tray,

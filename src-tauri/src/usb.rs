@@ -561,7 +561,96 @@ async fn handle_aoa_device(
 
 // ─── 驱动检测 ──────────────────────────────────────────────
 
-/// 检测 USB 驱动是否可用
+/// USB 诊断：枚举所有 USB 设备，返回可读的诊断信息
+pub fn diagnose_usb() -> String {
+    let mut report = String::new();
+    report.push_str("=== USB 诊断报告 ===\n\n");
+
+    // 1. 检查 rusb 是否可用
+    let devices = match rusb::devices() {
+        Ok(d) => {
+            report.push_str(&format!("✓ libusb 可用，发现 {} 个 USB 设备\n\n", d.len()));
+            d
+        }
+        Err(e) => {
+            report.push_str(&format!("✗ libusb 不可用: {}\n", e));
+            report.push_str("  请安装 libusb/WinUSB 驱动\n");
+            return report;
+        }
+    };
+
+    // 2. 枚举所有设备
+    let mut found_android = false;
+    let mut found_aoa = false;
+
+    for device in devices.iter() {
+        let desc = match device.device_descriptor() {
+            Ok(d) => d,
+            Err(e) => {
+                report.push_str(&format!("  [无法读取描述符: {}]\n", e));
+                continue;
+            }
+        };
+
+        let vid = desc.vendor_id();
+        let pid = desc.product_id();
+        if vid == 0 { continue; }
+
+        let is_android = ANDROID_VENDOR_IDS.contains(&vid);
+        let is_aoa = is_aoa_pid(pid);
+
+        // 尝试获取设备字符串
+        let product_str = match device.open() {
+            Ok(h) => {
+                desc.product_string_index()
+                    .and_then(|idx| h.read_string_descriptor_ascii(idx).ok())
+                    .unwrap_or_else(|| format!("{:04X}:{:04X}", vid, pid))
+            }
+            Err(_) => format!("{:04X}:{:04X} (无法打开)", vid, pid),
+        };
+
+        let tag = if is_aoa {
+            " [AOA]"
+        } else if is_android {
+            " [Android]"
+        } else {
+            ""
+        };
+
+        report.push_str(&format!(
+            "  {:04X}:{:04X} {}{}\n",
+            vid, pid, product_str, tag
+        ));
+
+        if is_aoa { found_aoa = true; }
+        if is_android && !is_aoa {
+            found_android = true;
+            // 尝试打开设备
+            match device.open() {
+                Ok(_) => report.push_str("    → 打开成功（驱动正常）\n"),
+                Err(e) => report.push_str(&format!("    → 打开失败: {}（需要 WinUSB 驱动）\n", e)),
+            }
+        }
+    }
+
+    report.push_str("\n");
+
+    // 3. 总结
+    if found_aoa {
+        report.push_str("✓ 发现 AOA 设备 — 手机已进入配件模式\n");
+    } else if found_android {
+        report.push_str("⚠ 发现 Android 设备但未进入 AOA 模式\n");
+        report.push_str("  可能原因: Tauri AOA 握手失败或手机不支持 AOA\n");
+    } else {
+        report.push_str("✗ 未发现 Android 设备\n");
+        report.push_str("  请检查:\n");
+        report.push_str("  1. USB 线是否已连接\n");
+        report.push_str("  2. 手机 USB 调试是否已开启\n");
+        report.push_str("  3. 手机上是否弹出「允许 USB 调试」对话框并点击允许\n");
+    }
+
+    report
+}
 ///
 /// 检查 rusb 是否能枚举设备，以及能否打开 Android/AOA 设备
 pub fn check_usb_driver() -> bool {
