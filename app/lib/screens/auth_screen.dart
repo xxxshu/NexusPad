@@ -4,14 +4,15 @@ import 'package:flutter/services.dart';
 import '../models/control_mode.dart';
 import '../services/ws_service.dart';
 import 'gamepad_select_screen.dart';
+import 'home_screen.dart';
 import 'touchpad_screen.dart';
 
 /// PIN 认证页
 class AuthScreen extends StatefulWidget {
   final WsService wsService;
-  final ControlMode mode;
+  final ControlMode? mode; // null = 新流程（认证后进入模式选择）
 
-  const AuthScreen({super.key, required this.wsService, required this.mode});
+  const AuthScreen({super.key, required this.wsService, this.mode});
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -40,7 +41,16 @@ class _AuthScreenState extends State<AuthScreen> {
     switch (ws.state) {
       case ConnState.connected:
         // 认证成功，根据模式跳转不同页面
-        if (widget.mode == ControlMode.gamepad) {
+        if (widget.mode == null) {
+          // 新流程：认证后进入模式选择页
+          Navigator.of(context).pushReplacement(
+            PageRouteBuilder(
+              pageBuilder: (_, a, b) => HomeScreen(wsService: ws),
+              transitionDuration: Duration.zero,
+              reverseTransitionDuration: Duration.zero,
+            ),
+          );
+        } else if (widget.mode == ControlMode.gamepad) {
           // 游戏手柄模式：先检测驱动，再跳转
           ws.requestVigemCheck();
           // 等待 vigem 检测结果（最多 500ms）

@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../models/protocol.dart';
 import '../services/ws_service.dart';
 import '../utils/haptic.dart';
 import 'custom_layout_list_screen.dart';
 import 'gamepad_screen.dart';
+import 'settings_screen.dart';
 
 /// 手柄类型选择页（竖屏）
 class GamepadSelectScreen extends StatefulWidget {
@@ -57,6 +59,14 @@ class _GamepadSelectScreenState extends State<GamepadSelectScreen> {
           ),
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
+            icon: const Icon(Icons.settings, color: Color(0xFF6e8aa8)),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Center(
@@ -66,7 +76,7 @@ class _GamepadSelectScreenState extends State<GamepadSelectScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _GamepadCard(
-                  icon: Icons.gamepad,
+                  icon: SvgPicture.asset('assets/icons/Xbox.svg', width: 24, height: 24, colorFilter: const ColorFilter.mode(Color(0xFF107C10), BlendMode.srcIn)),
                   title: 'Xbox 360 Controller',
                   subtitle: 'A B X Y · LB RB · 左右摇杆 · 十字键',
                   color: const Color(0xFF107C10),
@@ -74,7 +84,7 @@ class _GamepadSelectScreenState extends State<GamepadSelectScreen> {
                 ),
                 const SizedBox(height: 16),
                 _GamepadCard(
-                  icon: Icons.gamepad,
+                  icon: SvgPicture.asset('assets/icons/PS5.svg', width: 24, height: 24, colorFilter: const ColorFilter.mode(Color(0xFF003087), BlendMode.srcIn)),
                   title: 'PS5 DualSense',
                   subtitle: '× ○ □ △ · L1 R1 · 左右摇杆 · 十字键',
                   color: const Color(0xFF003087),
@@ -82,10 +92,10 @@ class _GamepadSelectScreenState extends State<GamepadSelectScreen> {
                 ),
                 const SizedBox(height: 16),
                 _GamepadCard(
-                  icon: Icons.tune,
+                  icon: SvgPicture.asset('assets/icons/Custom.svg', width: 24, height: 24, colorFilter: const ColorFilter.mode(Color(0xFF1B8EF2), BlendMode.srcIn)),
                   title: '自定义布局',
                   subtitle: '创建你自己的手柄方案',
-                  color: const Color(0xFF6e8aa8),
+                  color: const Color(0xFF1B8EF2),
                   onTap: () {
                     Haptic.tap();
                     Navigator.of(context).push(
@@ -105,7 +115,7 @@ class _GamepadSelectScreenState extends State<GamepadSelectScreen> {
 }
 
 class _GamepadCard extends StatelessWidget {
-  final IconData icon;
+  final Widget icon;
   final String title;
   final String subtitle;
   final Color color;
@@ -150,7 +160,7 @@ class _GamepadCard extends StatelessWidget {
                   color: color.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: color, size: 24),
+                child: icon,
               ),
               const SizedBox(width: 14),
               Expanded(

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/home_screen.dart';
+import 'screens/connection_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,7 +21,7 @@ class NexusPadApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFeef4fd),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const ConnectionScreen(),
     );
   }
 }

@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../models/control_mode.dart';
-import 'qr_scan_screen.dart';
+import '../services/ws_service.dart';
+import '../utils/haptic.dart';
+import 'gamepad_select_screen.dart';
+import 'touchpad_screen.dart';
 
-/// 模式选择首页（竖屏）
+/// 模式选择页（竖屏）—— 连接成功后进入
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final WsService wsService;
+  const HomeScreen({super.key, required this.wsService});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -79,9 +82,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: '鼠标移动 · 点击 · 滚动 · 缩放',
                   color: const Color(0xFF2395f3),
                   onTap: () {
+                    Haptic.tap();
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => const QRScanScreen(mode: ControlMode.touchpad),
+                        builder: (_) => TouchpadScreen(wsService: widget.wsService),
                       ),
                     );
                   },
@@ -94,9 +98,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: 'Xbox 360 · PS5 · 自定义布局',
                   color: const Color(0xFF4a7c59),
                   onTap: () {
+                    Haptic.tap();
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => const QRScanScreen(mode: ControlMode.gamepad),
+                        builder: (_) => GamepadSelectScreen(wsService: widget.wsService),
                       ),
                     );
                   },

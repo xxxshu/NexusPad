@@ -21,7 +21,7 @@ use tracing::{info, warn};
 use crate::gamepad::GamepadManager;
 use crate::input::InputSimulator;
 use crate::platform::{self, PlatformHandler};
-use crate::protocol::{ClientMsg, ServerMsg};
+use crate::protocol::{ClientMessage, ClientMsg, ServerMsg};
 
 /// Frontend files embedded in the binary at compile time
 #[derive(Clone)]
@@ -68,6 +68,14 @@ pub struct ServerState {
     pub last_ime_status: Arc<Mutex<String>>,
     /// Virtual gamepad manager (ViGEmBus)
     pub gamepad: Arc<Mutex<GamepadManager>>,
+    /// Active USB controller sender (for writing TLV frames to USB device)
+    pub active_usb: Arc<Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
+    /// Connected USB device name
+    pub usb_device_name: Arc<Mutex<Option<String>>>,
+    /// Active BLE controller sender (for writing TLV frames via Notify)
+    pub active_ble: Arc<Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
+    /// Connected BLE device name
+    pub ble_device_name: Arc<Mutex<Option<String>>>,
 }
 
 /// Generate a random 6-digit PIN
@@ -100,21 +108,47 @@ impl ServerState {
             app_handle,
             last_ime_status: Arc::new(Mutex::new("EN".to_string())),
             gamepad: Arc::new(Mutex::new(GamepadManager::new())),
+            active_usb: Arc::new(Mutex::new(None)),
+            usb_device_name: Arc::new(Mutex::new(None)),
+            active_ble: Arc::new(Mutex::new(None)),
+            ble_device_name: Arc::new(Mutex::new(None)),
         }
     }
 
-    fn send_event(&self, msg: String) {
+    pub fn send_event(&self, msg: String) {
         let _ = self.event_tx.send(msg);
     }
 
-    /// Send a message to the active controller's WebSocket
+    /// Send a text message to the active controller (WS, USB, or BLE)
     async fn send_to_active(&self, msg: &str) -> bool {
+        // Check WebSocket first
         let active = self.active_ws.lock().await;
         if let Some((_, ref tx)) = *active {
-            tx.send(Message::Text(msg.into())).is_ok()
-        } else {
-            false
+            return tx.send(Message::Text(msg.into())).is_ok();
         }
+        drop(active);
+
+        // Check USB
+        let active_usb = self.active_usb.lock().await;
+        if let Some(ref tx) = *active_usb {
+            let frame = crate::codec::TlvFrame {
+                frame_type: crate::codec::FRAME_CONTROL,
+                payload: msg.as_bytes().to_vec(),
+            };
+            return tx.send(frame.encode()).is_ok();
+        }
+        drop(active_usb);
+
+        // Check BLE
+        let active_ble = self.active_ble.lock().await;
+        if let Some(ref tx) = *active_ble {
+            let frame = crate::codec::TlvFrame {
+                frame_type: crate::codec::FRAME_CONTROL,
+                payload: msg.as_bytes().to_vec(),
+            };
+            return tx.send(frame.encode()).is_ok();
+        }
+        false
     }
 
     /// Read current IME status and push it to the active controller.
@@ -148,7 +182,7 @@ impl ServerState {
     }
 
     /// Emit a Tauri event to the GUI frontend
-    fn emit_gui_event(&self, event: &str, payload: serde_json::Value) {
+    pub fn emit_gui_event(&self, event: &str, payload: serde_json::Value) {
         if let Some(ref handle) = self.app_handle {
             let _ = handle.emit(event, payload);
         }
@@ -681,6 +715,13 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
                     }
                 }
             }
+            Message::Binary(data) => {
+                if let Some(client_msg) = ClientMessage::from_binary(&data) {
+                    handle_binary_msg(client_msg, &state, &addr_str).await;
+                } else {
+                    warn!("Invalid binary frame from {}", addr_str);
+                }
+            }
             Message::Close(_) => break,
             _ => {}
         }
@@ -857,5 +898,60 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
 
     if let Err(e) = result {
         warn!("Input error from {}: {}", addr, e);
+    }
+}
+
+/// Handle a binary TLV message (gamepad state, input move/scroll, heartbeat)
+async fn handle_binary_msg(msg: ClientMessage, state: &Arc<ServerState>, addr: &str) {
+    match msg {
+        ClientMessage::BinaryGamepad(gp) => {
+            let (lx, ly, rx, ry, lt, rt, buttons) = gp.to_f64();
+            let mut gp_mgr = state.gamepad.lock().await;
+            if let Err(e) = gp_mgr.update(lx, ly, rx, ry, lt, rt, buttons) {
+                // Only log occasionally to avoid spam
+                if rand::random::<u8>() < 5 {
+                    warn!("Gamepad binary update error from {}: {}", addr, e);
+                }
+            }
+        }
+        ClientMessage::BinaryMove { x, y } => {
+            let input = state.input.lock().await;
+            if let Err(e) = input.mouse_move(x as f64, y as f64).await {
+                if rand::random::<u8>() < 5 {
+                    warn!("Binary move error from {}: {}", addr, e);
+                }
+            }
+        }
+        ClientMessage::BinaryScroll { x, y } => {
+            let input = state.input.lock().await;
+            if let Err(e) = input.mouse_scroll(x as f64, y as f64).await {
+                if rand::random::<u8>() < 5 {
+                    warn!("Binary scroll error from {}: {}", addr, e);
+                }
+            }
+        }
+        ClientMessage::Heartbeat => {
+            // Heartbeat received, no action needed
+        }
+        ClientMessage::Json(_) => {
+            // Should not reach here — JSON messages go through handle_client_msg
+            warn!("Unexpected Json in handle_binary_msg from {}", addr);
+        }
+    }
+}
+
+/// 统一消息分发入口（供 USB/BLE 等非 WebSocket 通道调用）
+pub async fn handle_client_message_static(
+    msg: ClientMessage,
+    state: &Arc<ServerState>,
+    addr: &str,
+) {
+    match msg {
+        ClientMessage::Json(json_msg) => {
+            handle_client_msg(json_msg, state, addr).await;
+        }
+        other => {
+            handle_binary_msg(other, state, addr).await;
+        }
     }
 }

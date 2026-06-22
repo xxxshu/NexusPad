@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/protocol.dart';
+import '../transport/transport.dart';
+import '../transport/ws_channel.dart';
 
 /// 连接状态
 enum ConnState {
@@ -16,10 +16,12 @@ enum ConnState {
   error,
 }
 
-/// WebSocket 连接管理器
+/// 连接管理器 — 通过传输通道抽象与桌面端通信
+///
+/// 当前使用 WebSocket 通道，后续可切换到 USB/BLE
 class WsService extends ChangeNotifier {
-  WebSocketChannel? _channel;
-  StreamSubscription? _sub;
+  WsChannel? _transport;
+  StreamSubscription? _msgSub;
   Timer? _reconnectTimer;
 
   // 连接信息（用于重连）
@@ -49,7 +51,7 @@ class WsService extends ChangeNotifier {
   // 连接管理
   // =========================================================================
 
-  /// 连接到桌面端 WebSocket 服务
+  /// 连接到桌面端（当前: WebSocket 通道）
   Future<void> connect(String host, int port) async {
     _host = host;
     _port = port;
@@ -60,17 +62,12 @@ class WsService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final uri = Uri.parse('ws://$host:$port/ws');
-      _channel = WebSocketChannel.connect(uri);
+      _transport = WsChannel();
+      _transport!.onDisconnect = _onTransportDone;
+      _msgSub = _transport!.onMessage.listen(_onMessage);
 
-      // 等待连接建立
-      await _channel!.ready;
-
-      _sub = _channel!.stream.listen(
-        _onData,
-        onDone: _onDone,
-        onError: _onError,
-      );
+      await _transport!.connect(host, port);
+      // 连接成功后等待服务端推送 auth_required
     } catch (e) {
       _state = ConnState.error;
       _errorMessage = '连接失败: $e';
@@ -84,7 +81,7 @@ class WsService extends ChangeNotifier {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _hasEverControlled = false; // 主动断开不重连
-    _closeChannel();
+    _closeTransport();
     _state = ConnState.disconnected;
     _hasControl = false;
     _approvalIp = null;
@@ -95,55 +92,75 @@ class WsService extends ChangeNotifier {
   // 消息发送
   // =========================================================================
 
-  /// 发送 PIN 认证
+  /// 发送 PIN 认证 (JSON 文本帧)
   void sendPin(String pin) {
-    _sendRaw(CAuth(pin).encode());
+    _sendText(CAuth(pin).encode());
   }
 
-  /// 发送设备审批响应
+  /// 发送设备审批响应 (JSON 文本帧)
   void sendApproval(String r) {
-    _sendRaw(CApprovalResp(r).encode());
+    _sendText(CApprovalResp(r).encode());
     _approvalIp = null;
     notifyListeners();
   }
 
-  /// 请求检测 ViGEmBus 驱动状态
+  /// 请求检测 ViGEmBus 驱动状态 (JSON 文本帧)
   void requestVigemCheck() {
-    _sendRaw(CVigemCheck().encode());
+    _sendText(CVigemCheck().encode());
   }
 
-  /// 发送控制消息（带 hasControl 守卫）
+  /// 发送控制消息 — JSON 文本帧（带 hasControl 守卫）
   void sendMessage(ClientMsg msg) {
     if (!_hasControl) return;
-    _sendRaw(msg.encode());
+    _sendText(msg.encode());
   }
 
-  void _sendRaw(String data) {
-    if (_channel != null) {
-      try {
-        _channel!.sink.add(data);
-      } catch (_) {
-        // 发送失败，连接可能已断开
-      }
+  /// 发送控制消息 — TLV 二进制帧（带 hasControl 守卫）
+  ///
+  /// 用于高频数据（手柄状态、触控板移动等）
+  void sendBinaryMsg(ClientMsg msg) {
+    if (!_hasControl) return;
+    // 检查消息是否支持二进制编码
+    if (msg is CGamepadState) {
+      _sendBinary(msg.encodeTlv());
+    } else if (msg is CMove) {
+      _sendBinary(msg.encodeTlv());
+    } else if (msg is CScroll) {
+      _sendBinary(msg.encodeTlv());
+    } else {
+      // 不支持二进制的消息回退到 JSON
+      _sendText(msg.encode());
     }
+  }
+
+  void _sendText(String data) {
+    _transport?.sendText(data);
+  }
+
+  void _sendBinary(Uint8List data) {
+    _transport?.sendBinary(data);
   }
 
   // =========================================================================
   // 消息处理
   // =========================================================================
 
-  void _onData(dynamic data) {
-    if (data is! String) return;
+  void _onMessage(TransportMessage msg) {
+    switch (msg) {
+      case TextMessage(:final data):
+        Map<String, dynamic> json;
+        try {
+          json = jsonDecode(data) as Map<String, dynamic>;
+        } catch (_) {
+          return;
+        }
+        final serverMsg = ServerMsg.fromJson(json);
+        _handleServerMsg(serverMsg);
 
-    Map<String, dynamic> json;
-    try {
-      json = jsonDecode(data) as Map<String, dynamic>;
-    } catch (_) {
-      return;
+      case BinaryMessage():
+        // 当前服务端下行只发 JSON 文本帧，二进制下行（震动等）后续实现
+        break;
     }
-
-    final msg = ServerMsg.fromJson(json);
-    _handleServerMsg(msg);
   }
 
   void _handleServerMsg(ServerMsg msg) {
@@ -208,11 +225,12 @@ class WsService extends ChangeNotifier {
   // 连接生命周期
   // =========================================================================
 
-  void _onDone() {
-    final closeCode = _channel?.closeCode;
-    _channel = null;
-    _sub?.cancel();
-    _sub = null;
+  /// 传输通道断开时的回调（由 onMessage stream 关闭触发）
+  void _onTransportDone() {
+    final closeCode = _transport?.closeCode;
+    _transport = null;
+    _msgSub?.cancel();
+    _msgSub = null;
 
     // 根据 close code 处理
     switch (closeCode) {
@@ -249,17 +267,11 @@ class WsService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _onError(Object error) {
-    _channel?.sink.close();
-  }
-
-  void _closeChannel() {
-    _sub?.cancel();
-    _sub = null;
-    try {
-      _channel?.sink.close();
-    } catch (_) {}
-    _channel = null;
+  void _closeTransport() {
+    _msgSub?.cancel();
+    _msgSub = null;
+    _transport?.dispose();
+    _transport = null;
   }
 
   // =========================================================================
@@ -279,7 +291,7 @@ class WsService extends ChangeNotifier {
   @override
   void dispose() {
     _reconnectTimer?.cancel();
-    _closeChannel();
+    _closeTransport();
     super.dispose();
   }
 }

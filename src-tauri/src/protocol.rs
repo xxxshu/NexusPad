@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+use crate::codec::{
+    self, GamepadStateBinary, FRAME_GAMEPAD, FRAME_HEARTBEAT, FRAME_INPUT,
+    INPUT_SUB_MOVE, INPUT_SUB_SCROLL, TlvFrame,
+};
+
 /// Client → Server messages
 #[derive(Debug, Deserialize)]
 #[serde(tag = "a")]
@@ -83,4 +88,52 @@ pub enum ServerMsg {
     /// ViGEmBus driver detection result
     #[serde(rename = "vigem")]
     VigemStatus { installed: bool },
+}
+
+// ─── 统一消息分发 ──────────────────────────────────────────
+
+/// 解析后的客户端消息，可来自 JSON 文本帧或 TLV 二进制帧
+pub enum ClientMessage {
+    /// JSON 文本帧解析结果 (向后兼容)
+    Json(ClientMsg),
+    /// 二进制手柄帧 (type=0x03)
+    BinaryGamepad(GamepadStateBinary),
+    /// 二进制输入帧 — move (type=0x02, sub=0x01)
+    BinaryMove { x: i16, y: i16 },
+    /// 二进制输入帧 — scroll (type=0x02, sub=0x02)
+    BinaryScroll { x: i16, y: i16 },
+    /// 心跳帧 (type=0xFF)
+    Heartbeat,
+}
+
+impl ClientMessage {
+    /// 从 JSON 文本帧解析
+    pub fn from_text(text: &str) -> Option<Self> {
+        serde_json::from_str::<ClientMsg>(text)
+            .ok()
+            .map(ClientMessage::Json)
+    }
+
+    /// 从 TLV 二进制帧解析
+    pub fn from_binary(data: &[u8]) -> Option<Self> {
+        let (frame, _) = TlvFrame::decode(data)?;
+        match frame.frame_type {
+            FRAME_GAMEPAD => GamepadStateBinary::decode(&frame.payload)
+                .map(ClientMessage::BinaryGamepad),
+            FRAME_INPUT => {
+                if frame.payload.is_empty() {
+                    return None;
+                }
+                match frame.payload[0] {
+                    INPUT_SUB_MOVE => codec::decode_input_move(&frame.payload)
+                        .map(|(x, y)| ClientMessage::BinaryMove { x, y }),
+                    INPUT_SUB_SCROLL => codec::decode_input_scroll(&frame.payload)
+                        .map(|(x, y)| ClientMessage::BinaryScroll { x, y }),
+                    _ => None,
+                }
+            }
+            FRAME_HEARTBEAT => Some(ClientMessage::Heartbeat),
+            _ => None,
+        }
+    }
 }

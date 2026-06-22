@@ -4,12 +4,15 @@ use tauri::{Manager, State};
 use tokio::sync::{broadcast, Mutex};
 use serde::Serialize;
 
+mod ble;
+mod codec;
 mod config;
 mod gamepad;
 mod input;
 mod platform;
 mod protocol;
 mod server;
+mod usb;
 
 use config::AppConfig;
 use server::ServerState;
@@ -137,6 +140,20 @@ async fn start_server_cmd(
         }
     });
 
+    // Start USB AOA listener in background
+    let usb_state = server_state.clone();
+    let usb_stop_rx = stop_tx.subscribe();
+    let _usb_handle = tokio::spawn(async move {
+        usb::start_usb_listener(usb_state, usb_stop_rx).await;
+    });
+
+    // Start BLE GATT Server in background
+    let ble_state = server_state.clone();
+    let ble_stop_rx = stop_tx.subscribe();
+    let _ble_handle = tokio::spawn(async move {
+        ble::start_ble_server(ble_state, ble_stop_rx).await;
+    });
+
     let ip = server::get_local_ip();
     let url = format!("http://{}:{}", ip, port);
     let qr_svg = server::generate_qr_svg(&url);
@@ -258,6 +275,12 @@ fn app_version() -> String {
 #[tauri::command]
 fn check_vigem_installed() -> bool {
     gamepad::GamepadManager::is_installed()
+}
+
+/// Check if USB driver (libusb) is available and can open AOA devices
+#[tauri::command]
+fn check_usb_driver() -> bool {
+    usb::check_usb_driver()
 }
 
 /// Get whether autostart on boot is enabled
@@ -399,6 +422,7 @@ pub fn run() {
             check_port,
             app_version,
             check_vigem_installed,
+            check_usb_driver,
             get_autostart,
             set_autostart,
             get_minimize_to_tray,
@@ -466,6 +490,13 @@ pub fn run_cli() {
                 Ok(()) => eprintln!("[info] Server exited normally"),
                 Err(e) => eprintln!("[error] Server error: {}", e),
             }
+        });
+
+        // Start USB AOA listener
+        let usb_state = server_state.clone();
+        let usb_stop_rx = stop_tx.subscribe();
+        tokio::spawn(async move {
+            usb::start_usb_listener(usb_state, usb_stop_rx).await;
         });
 
         // Give server a moment to start

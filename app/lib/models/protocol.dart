@@ -1,4 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
+import '../codec/frame_types.dart';
+import '../codec/tlv_codec.dart';
 
 // ============================================================================
 // ClientMsg — 发送到服务端的消息
@@ -16,6 +20,18 @@ class CMove extends ClientMsg {
   CMove(this.x, this.y);
   @override
   Map<String, dynamic> toJson() => {'a': 'mv', 'x': x, 'y': y};
+
+  /// 纯二进制编码 (type=0x02 输入帧 payload): [1B sub=0x01][2B x][2B y]
+  Uint8List encodeBinary() {
+    final buf = ByteData(5);
+    buf.setUint8(0, InputSubType.move);
+    buf.setInt16(1, x, Endian.big);
+    buf.setInt16(3, y, Endian.big);
+    return buf.buffer.asUint8List();
+  }
+
+  /// TLV 帧封装，可直接发送
+  Uint8List encodeTlv() => TlvCodec.encode(FrameType.input, encodeBinary());
 }
 
 /// 点击: b=1 左键, b=2 中键, b=3 右键
@@ -54,6 +70,18 @@ class CScroll extends ClientMsg {
   CScroll(this.x, this.y);
   @override
   Map<String, dynamic> toJson() => {'a': 'scr', 'x': x, 'y': y};
+
+  /// 纯二进制编码 (type=0x02 输入帧 payload): [1B sub=0x02][2B x][2B y]
+  Uint8List encodeBinary() {
+    final buf = ByteData(5);
+    buf.setUint8(0, InputSubType.scroll);
+    buf.setInt16(1, x.round().toInt(), Endian.big);
+    buf.setInt16(3, y.round().toInt(), Endian.big);
+    return buf.buffer.asUint8List();
+  }
+
+  /// TLV 帧封装，可直接发送
+  Uint8List encodeTlv() => TlvCodec.encode(FrameType.input, encodeBinary());
 }
 
 /// 缩放: m=log-ratio (>0 放大, <0 缩小)
@@ -149,6 +177,24 @@ class CGamepadState extends ClientMsg {
     'a': 'gp', 'lx': lx, 'ly': ly, 'rx': rx, 'ry': ry,
     'lt': lt, 'rt': rt, 'b': b,
   };
+
+  /// 纯二进制编码 (type=0x03 手柄帧 payload):
+  /// [2B lx][2B ly][2B rx][2B ry][1B lt][1B rt][2B buttons][1B gyro_flag]
+  Uint8List encodeBinary() {
+    final buf = ByteData(13);
+    buf.setInt16(0, (lx.clamp(-1.0, 1.0) * 32767).toInt(), Endian.big);
+    buf.setInt16(2, (ly.clamp(-1.0, 1.0) * 32767).toInt(), Endian.big);
+    buf.setInt16(4, (rx.clamp(-1.0, 1.0) * 32767).toInt(), Endian.big);
+    buf.setInt16(6, (ry.clamp(-1.0, 1.0) * 32767).toInt(), Endian.big);
+    buf.setUint8(8, (lt.clamp(0.0, 1.0) * 255).toInt());
+    buf.setUint8(9, (rt.clamp(0.0, 1.0) * 255).toInt());
+    buf.setUint16(10, b & 0xFFFF, Endian.big);
+    buf.setUint8(12, 0); // gyro_flag: 0 = 无陀螺仪数据
+    return buf.buffer.asUint8List();
+  }
+
+  /// TLV 帧封装，可直接发送
+  Uint8List encodeTlv() => TlvCodec.encode(FrameType.gamepad, encodeBinary());
 }
 
 /// 销毁虚拟手柄

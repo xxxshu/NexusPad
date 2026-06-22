@@ -1,0 +1,117 @@
+```markdown
+# 🔌 NexusPad USB 与蓝牙双通道物理传输层落地方案
+
+## 📌 核心重构原则：传输通道热插拔（Transport Swapping）
+必须保持前一阶段确定的 **16字节上行/4字节下行二进制协议** 绝对不改动。
+将物理通道抽象为统一的 `StreamChannel` 接口。无论是 USB 还是蓝牙，只负责将这 16/4 字节的裸数据写入对应的硬件管道。
+本方案的目标是直接榨干 **USB Bulk 传输的 1000Hz 刷新率** 以及 **蓝牙 RFCOMM 的点对点低延迟** 物理上限。
+
+---
+
+## 🎛️ 1. USB 连接方案：Android AOA (Accessory) 协议满血直连
+放弃脆弱且依赖 PC 端环境配置的 ADB 端口转发（Port Forwarding）方案，全面转向 **Android Open Accessory (AOA)** 模式。
+在此模式下，手机作为 USB 外设（Accessory），电脑作为 USB 主机（Host）为其供电并建立双向批量传输（Bulk Transfer）管道。该方案延迟最低（<1ms），刷新率可顶满 1000Hz。
+
+
+```
+
+【USB AOA 拓扑架构】
+Flutter 客户端 (USB Accessory) <=== USB 物理线缆 (Bulk In/Out) ===> Rust 后端 (USB Host / LibUSB)
+
+```
+
+### 📱 客户端改动 (Flutter / Android 原生)
+由于 Flutter 暂无成熟的 AOA 插件，此部分必须通过 **MethodChannel** 编写 Android 原生 Java/Kotlin 代码。
+1. **清单文件配置 (`AndroidManifest.xml`)**：
+   注册 AOA 权限以及 USB 插入意图过滤器，确保手机一插线自动唤醒 App。
+   ```xml
+   <intent-filter>
+       <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+   </intent-filter>
+   <meta-data android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" android:resource="@xml/accessory_filter" />
+
+```
+
+2. **原生 Android 传输管道实现**：
+在获取 `UsbAccessory` 权限后，打开文件描述符 `ParcelFileDescriptor`，拆分出底层 `FileInputStream`（读取震动）和 `FileOutputStream`（写入体感）。
+3. **Flutter 层对接**：
+通过 `MethodChannel` 启动 AOA 握手；通过 `EventChannel` 将读到的震动字节流高频抛给 Dart；体感数据则通过二进制 `Uint8List` 直接通过 `MethodChannel` 的最低开销方式高频下发到原生流中。
+
+### 💻 服务端改动 (Tauri / Rust 后端)
+
+后端摆脱对任何网络端口的依赖，直接调用底层 USB 驱动栈。
+
+1. **引入依赖**：使用 `rusb` (基于 libusb 的 Rust 绑定) 来直接操控系统的 USB 核心。
+2. **AOA 协议握手初始化（关键枚举逻辑）**：
+Rust 需要高频轮询（或监听系统 USB 事件）特定 PID/VID 的 Android 设备。发现设备后，必须通过 **USB Control Transfer (Request: 51 至 53)** 向手机写入特定的厂商字符串（Manufacturer, Model, Version），强行将手机提升为 AOA 模式。
+3. **开启 Bulk Transfer 读写线程**：
+握手成功后，手机的 VID/PID 会改变。Rust 重新连接新设备，锁定 `Bulk In` 和 `Bulk Out` 两个端点（Endpoints）。
+* **写线程**：将 ViGEm 拦截到的 4 字节震动包，直接调用 `device_handle.write_bulk` 砸向手机。
+* **读线程**：开启死循环，利用 `device_handle.read_bulk` 以 1ms 的超时时间高频阻塞式读取 16 字节控制帧，读到立刻喂给之前写好的 `process_gyro_payload` 算法。
+
+
+
+---
+
+## 🔹 2. 蓝牙连接方案：经典蓝牙 SPP (Serial Port Profile) 点对点直连
+
+由于 BLE（低功耗蓝牙）有严格的 MTU 限制且单包延迟较高，为了追求手柄级的性能响应速度，**必须采用经典蓝牙 (Bluetooth Classic) 的 SPP 协议**。它在底层表现为标准的 RFCOMM 虚拟串口，具有高带宽、点对点稳定传输的特性。
+
+```
+【经典蓝牙 SPP 拓扑架构】
+Flutter 客户端 (RFCOMM Client) <=== 蓝牙无线链路 (UUID 串口) ===> Rust 后端 (RFCOMM Server)
+
+```
+
+### 📱 客户端改动 (Flutter)
+
+1. **引入插件**：使用支持经典蓝牙 SPP 的插件，如 **`flutter_bluetooth_serial`**（注意：非 flutter_blue_plus，后者仅支持 BLE）。
+2. **连接生命周期**：
+* 调用 `FlutterBluetoothSerial.instance.getBondedDevices()` 获取系统已配对的电脑。
+* 匹配到运行 Tauri 后端的电脑后，调用 `BluetoothConnection.toAddress(address)` 建立连接。
+
+
+3. **零开销读写**：
+连接成功后会返回标准的 `connection.output` (IOSink) 和 `connection.input` (Stream)。
+* **上行**：将 16 字节体感 Buffer 直接通过 `connection.output.add(bytes)` 发射，完全免去网络协议栈消耗。
+* **下行**：监听 `connection.input.listen`，收到 4 字节数据直接送入震动解析函数。
+
+
+
+### 💻 服务端改动 (Tauri / Rust 后端)
+
+跨平台（Windows/Linux）处理经典蓝牙的 RFCOMM 较为复杂，在 Windows 平台上，最顶级的性能做法是利用系统原生的 **Winsock Bluetooth**。
+
+1. **引入依赖**：使用 `winapi` 或 `windows-sys` 库，调用原生的网络套接字。因为在 Windows 底层，经典蓝牙是通过套接字 `AF_BTH` 实现的。
+2. **绑定并广播 RFCOMM 服务（Server 模式）**：
+后端必须作为蓝牙服务器运行，并在注册表或 SDP (Service Discovery Protocol) 中广播一个 NexusPad 专属的 **UUID**（例如：`4e5c0001-f2cb-4931-a20c-7b1981273948`）。
+```rust
+// Rust 伪代码：初始化 Windows 蓝牙套接字
+let server_socket = socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM);
+let mut addr: SOCKADDR_BTH = std::mem::zeroed();
+addr.addressFamily = AF_BTH;
+addr.port = BT_PORT_ANY; // 自动分配通道
+addr.serviceClassId = TEXT_TO_GUID("你的专属UUID");
+
+bind(server_socket, &addr);
+listen(server_socket, 1);
+
+```
+
+
+3. **数据交换管道**：
+`accept` 接收手机端的连接请求后，拿到的 `client_socket` 行为与标准 TCP Socket 完全一致。直接通过原生 `recv` 接收 16 字节输入，通过 `send` 发送 4 字节震动。由于移除了局域网路由器的中转，其点对点延迟可稳定压制在 5ms 左右。
+
+---
+
+## 📝 阶段交付目标（给 Claude Code 的推进排期）
+
+让 Claude Code 按照以下步骤开发，切记每一步必须做通路跑通测试：
+
+* **Step 1【架构重构】**：在 Flutter 和 Rust 两端，分别把负责发送/接收的代码抽离成接口。将之前的 UDP 代码归类为 `UdpTransport` 驱动，为接下来的 `UsbTransport` 和 `BluetoothTransport` 留出挂载空壳。
+* **Step 2【蓝牙突破】**：先做经典蓝牙。因为在 Rust 端它依然表现为 Socket 行为，开发难度比 USB 略低。优先打通“Flutter蓝牙连接➔Windows服务端监听➔16字节体感输入测试➔灵敏度设置项对接”。
+* **Step 3【USB 攻坚】**：编写 Android 的 MethodChannel 和 Rust 的 `rusb` 模块，执行 AOA 握手。一旦手机屏幕弹出“是否允许NexusPad访问该USB配件”的提示，即代表物理通道全面拓荒成功。
+
+```
+
+```
