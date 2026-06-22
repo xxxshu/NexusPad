@@ -314,6 +314,8 @@ export default function App() {
             position: isSettings ? "relative" : "absolute",
             top: 0, left: 0, right: 0,
             pointerEvents: isSettings ? "auto" : "none",
+            maxHeight: isSettings ? 310 : undefined,
+            overflowY: isSettings ? "auto" : "hidden",
           }}
         >
           <SettingsPanel />
