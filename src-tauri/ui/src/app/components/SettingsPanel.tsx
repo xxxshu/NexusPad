@@ -347,8 +347,14 @@ function GeneralTab() {
           <ol style={{ color: "#5a8fb5", fontSize: 12, margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
             <li>用 USB 线连接手机到电脑</li>
             <li>确保手机已开启 USB 调试</li>
-            <li>在手机端选择 USB 连接方式</li>
+            <li>在手机端选择 USB 连接方式（建议试一下不同模式）</li>
           </ol>
+          <div style={{ background: "#f0f8ff", border: "1px solid #b8d4e8", borderRadius: 7, padding: "10px 12px" }}>
+            <div style={{ color: "#0062AB", fontSize: 12, fontWeight: 500, marginBottom: 6 }}>💡 小提示</div>
+            <div style={{ color: "#003472", fontSize: 12, lineHeight: 1.6 }}>
+              如果 USB 连接失败，请先尝试在手机上切换一下 USB 模式（如「仅充电」、「文件传输」等），然后重试连接。
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button
               onClick={() => invoke("check_usb_driver").then((ok: any) => setUsbDriverOk(!!ok)).catch(() => setUsbDriverOk(false))}
@@ -378,7 +384,7 @@ function GeneralTab() {
               background: "#fff", border: "1px solid rgba(0,98,171,0.15)",
               borderRadius: 7, padding: "10px 12px", fontSize: 11,
               color: "#003472", whiteSpace: "pre-wrap", lineHeight: 1.6,
-              fontFamily: "Consolas, monospace", maxHeight: 200, overflow: "auto",
+              fontFamily: "Consolas, monospace", maxHeight: 250, overflow: "auto",
             }}>
               {usbDiag}
             </pre>

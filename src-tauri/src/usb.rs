@@ -9,7 +9,10 @@ use anyhow::{anyhow, Result};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{info, warn};
 
-use crate::codec::{TlvFrame, FRAME_CONTROL, FRAME_GAMEPAD, FRAME_HEARTBEAT, FRAME_INPUT, FRAME_SYSTEM, GamepadStateBinary};
+use crate::codec::{
+    GamepadStateBinary, TlvFrame, FRAME_CONTROL, FRAME_GAMEPAD, FRAME_HEARTBEAT, FRAME_INPUT,
+    FRAME_SYSTEM,
+};
 use crate::protocol::{ClientMessage, ServerMsg};
 use crate::server::ServerState;
 
@@ -98,17 +101,28 @@ fn find_android_device() -> Result<Option<(rusb::Device<rusb::GlobalContext>, St
         let pid = desc.product_id();
         // 记录所有 USB 设备（调试用）
         if vid != 0 && pid != 0 {
-            info!("USB device: {:04X}:{:04X} (class={:02X})", vid, pid, desc.class_code());
+            info!(
+                "USB device: {:04X}:{:04X} (class={:02X})",
+                vid,
+                pid,
+                desc.class_code()
+            );
         }
         if ANDROID_VENDOR_IDS.contains(&vid) && !is_aoa_pid(pid) {
             let product = format!("Android {:04X}:{:04X}", vid, pid);
-            info!("Found Android device: {} — attempting AOA handshake", product);
+            info!(
+                "Found Android device: {} — attempting AOA handshake",
+                product
+            );
             found_any = true;
             return Ok(Some((device, product)));
         }
     }
     if !found_any {
-        info!("USB: no Android devices found (scanned {} devices)", devices.len());
+        info!(
+            "USB: no Android devices found (scanned {} devices)",
+            devices.len()
+        );
     }
     Ok(None)
 }
@@ -183,9 +197,7 @@ fn start_accessory(handle: &rusb::DeviceHandle<rusb::GlobalContext>) -> Result<u
 /// 1. 设置 AOA 字符串（制造商、型号等）
 /// 2. 发送 Start Accessory 命令
 /// 3. 设备将重新枚举为 AOA Accessory
-fn perform_aoa_handshake(
-    device: &rusb::Device<rusb::GlobalContext>,
-) -> Result<()> {
+fn perform_aoa_handshake(device: &rusb::Device<rusb::GlobalContext>) -> Result<()> {
     // 尝试打开设备——可能因 Windows MTP/ADB 驱动占用而失败
     let handle = match device.open() {
         Ok(h) => h,
@@ -199,7 +211,10 @@ fn perform_aoa_handshake(
                             if let Ok(h) = device.open() {
                                 // 尝试 claim this interface
                                 let _ = h.claim_interface(iface_desc.interface_number());
-                                info!("AOA: opened device via interface {}", iface_desc.interface_number());
+                                info!(
+                                    "AOA: opened device via interface {}",
+                                    iface_desc.interface_number()
+                                );
                                 return perform_aoa_with_handle(&h);
                             }
                         }
@@ -207,10 +222,9 @@ fn perform_aoa_handshake(
                 }
             }
             warn!("AOA handshake: failed to open device — Access denied");
-            warn!("  → 请使用 Zadig 为手机 (VID:22D9) 安装 WinUSB 驱动");
-            warn!("  → 或者关闭 MTP 文件传输模式（仅保留 USB 调试）");
+            warn!("  → 请在手机上切换 USB 模式试试（如仅充电、文件传输等）");
             return Err(anyhow!(
-                "USB 驱动权限不足。请使用 Zadig 安装 WinUSB 驱动，或关闭手机的 MTP 文件传输模式。"
+                "USB 权限不足。请在手机上切换 USB 模式试试（如仅充电、文件传输等）"
             ));
         }
         Err(e) => {
@@ -222,10 +236,7 @@ fn perform_aoa_handshake(
     perform_aoa_with_handle(&handle)
 }
 
-fn perform_aoa_with_handle(
-    handle: &rusb::DeviceHandle<rusb::GlobalContext>,
-) -> Result<()> {
-
+fn perform_aoa_with_handle(handle: &rusb::DeviceHandle<rusb::GlobalContext>) -> Result<()> {
     // 某些设备需要先 detach kernel driver
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -249,9 +260,7 @@ fn perform_aoa_with_handle(
 // ─── Bulk Transfer 读写 ────────────────────────────────────
 
 /// 查找 Bulk In 和 Bulk Out 端点
-fn find_bulk_endpoints(
-    device: &rusb::Device<rusb::GlobalContext>,
-) -> Result<(u8, u8, u16)> {
+fn find_bulk_endpoints(device: &rusb::Device<rusb::GlobalContext>) -> Result<(u8, u8, u16)> {
     let desc = device.device_descriptor()?;
     let config_desc = device.config_descriptor(0)?;
 
@@ -322,10 +331,7 @@ impl UsbSender {
 ///
 /// 在后台 tokio task 中运行，持续监听 USB 设备连接。
 /// 当检测到 AOA 设备时，建立 Bulk Transfer 通道并开始处理消息。
-pub async fn start_usb_listener(
-    state: Arc<ServerState>,
-    mut stop_rx: broadcast::Receiver<()>,
-) {
+pub async fn start_usb_listener(state: Arc<ServerState>, mut stop_rx: broadcast::Receiver<()>) {
     info!("USB AOA listener started");
 
     loop {
@@ -515,8 +521,7 @@ async fn handle_aoa_device(
 
                 let msg = match frame.frame_type {
                     FRAME_GAMEPAD => {
-                        GamepadStateBinary::decode(&frame.payload)
-                            .map(ClientMessage::BinaryGamepad)
+                        GamepadStateBinary::decode(&frame.payload).map(ClientMessage::BinaryGamepad)
                     }
                     FRAME_INPUT => {
                         if frame.payload.is_empty() {
@@ -529,11 +534,9 @@ async fn handle_aoa_device(
                                     .map(|(x, y)| ClientMessage::BinaryScroll { x, y })
                             })
                     }
-                    FRAME_CONTROL => {
-                        String::from_utf8(frame.payload)
-                            .ok()
-                            .and_then(|s| ClientMessage::from_text(&s))
-                    }
+                    FRAME_CONTROL => String::from_utf8(frame.payload)
+                        .ok()
+                        .and_then(|s| ClientMessage::from_text(&s)),
                     FRAME_HEARTBEAT => Some(ClientMessage::Heartbeat),
                     _ => None,
                 };
@@ -621,6 +624,9 @@ pub fn diagnose_usb() -> String {
     // 2. 枚举所有设备
     let mut found_android = false;
     let mut found_aoa = false;
+    let mut found_accessible_aoa = false;
+    let mut found_inaccessible_android = false;
+    let mut inaccessible_device = String::new();
 
     for device in devices.iter() {
         let desc = match device.device_descriptor() {
@@ -633,18 +639,19 @@ pub fn diagnose_usb() -> String {
 
         let vid = desc.vendor_id();
         let pid = desc.product_id();
-        if vid == 0 { continue; }
+        if vid == 0 {
+            continue;
+        }
 
         let is_android = ANDROID_VENDOR_IDS.contains(&vid);
         let is_aoa = is_aoa_pid(pid);
 
         // 尝试获取设备字符串
         let product_str = match device.open() {
-            Ok(h) => {
-                desc.product_string_index()
-                    .and_then(|idx| h.read_string_descriptor_ascii(idx).ok())
-                    .unwrap_or_else(|| format!("{:04X}:{:04X}", vid, pid))
-            }
+            Ok(h) => desc
+                .product_string_index()
+                .and_then(|idx| h.read_string_descriptor_ascii(idx).ok())
+                .unwrap_or_else(|| format!("{:04X}:{:04X}", vid, pid)),
             Err(_) => format!("{:04X}:{:04X} (无法打开)", vid, pid),
         };
 
@@ -661,13 +668,23 @@ pub fn diagnose_usb() -> String {
             vid, pid, product_str, tag
         ));
 
-        if is_aoa { found_aoa = true; }
+        if is_aoa {
+            found_aoa = true;
+            if device.open().is_ok() {
+                found_accessible_aoa = true;
+                report.push_str("    → 打开成功！可以正常使用\n");
+            }
+        }
         if is_android && !is_aoa {
             found_android = true;
             // 尝试打开设备
             match device.open() {
                 Ok(_) => report.push_str("    → 打开成功（驱动正常）\n"),
-                Err(e) => report.push_str(&format!("    → 打开失败: {}（需要 WinUSB 驱动）\n", e)),
+                Err(e) => {
+                    report.push_str(&format!("    → 打开失败: {}（权限不足）\n", e));
+                    found_inaccessible_android = true;
+                    inaccessible_device = format!("{:04X}:{:04X}", vid, pid);
+                }
             }
         }
     }
@@ -675,8 +692,24 @@ pub fn diagnose_usb() -> String {
     report.push_str("\n");
 
     // 3. 总结
-    if found_aoa {
-        report.push_str("✓ 发现 AOA 设备 — 手机已进入配件模式\n");
+    if found_accessible_aoa {
+        report.push_str("✓ 发现可访问的 AOA 设备 — 一切正常！可以直接使用\n");
+    } else if found_aoa {
+        report.push_str("⚠ 发现 AOA 设备但无法访问\n");
+        report.push_str("  问题：AOA 设备驱动问题\n");
+        report.push_str("  建议：尝试重新插拔 USB 线\n");
+    } else if found_inaccessible_android {
+        report.push_str("⚠ 发现 Android 设备但无法访问\n");
+        report.push_str(&format!("  设备: {}\n\n", inaccessible_device));
+        report.push_str("  📱 解决方案（Windows USB 连接有两种方案：\n\n");
+        report.push_str("  方案 1：最简单（推荐先试）\n");
+        report.push_str("    1. 在手机上，下拉通知栏\n");
+        report.push_str("    2. 找到「USB 用于」或类似选项\n");
+        report.push_str("    3. 切换到「仅充电」或「文件传输」等不同模式\n");
+        report.push_str("    4. 然后重试连接\n\n");
+        report.push_str("  方案 2：如果方案 1 不行\n");
+        report.push_str("    需要为该设备安装 WinUSB 驱动\n");
+        report.push_str("    （这是 Windows USB 设备的标准做法\n\n");
     } else if found_android {
         report.push_str("⚠ 发现 Android 设备但未进入 AOA 模式\n");
         report.push_str("  可能原因: Tauri AOA 握手失败或手机不支持 AOA\n");
@@ -693,12 +726,29 @@ pub fn diagnose_usb() -> String {
 ///
 /// 检查 USB 支持是否可用
 /// - 只要 libusb 能正常初始化，就返回 true
-/// - 用户可以直接尝试连接，不需要先安装复杂的驱动
+/// - 如果发现有设备但无法访问，会提供更详细的信息
 pub fn check_usb_driver() -> bool {
     match rusb::devices() {
         Ok(devices) => {
             info!("USB check: libusb OK, found {} USB devices", devices.len());
-            true // libusb 工作正常，USB 功能可用
+
+            // 检查是否有 AOA 设备已经可以访问
+            for device in devices.iter() {
+                let desc = match device.device_descriptor() {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                if is_aoa_pid(desc.product_id()) {
+                    if device.open().is_ok() {
+                        info!("USB check: found accessible AOA device");
+                        return true;
+                    }
+                }
+            }
+
+            // 如果没有 AOA 设备，或者无法访问，也返回 true，因为 libusb 本身工作正常
+            // 我们不因为设备驱动问题而阻止用户尝试
+            true
         }
         Err(e) => {
             warn!("USB check: libusb not available: {}", e);
