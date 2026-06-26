@@ -316,11 +316,11 @@ function GeneralTab() {
       </SectionCard>
 
       <SectionCard>
-        <SectionLabel label="USB 连接驱动" />
+        <SectionLabel label="USB 连接" />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div style={{ color: "#003472", fontSize: 13, fontWeight: 500 }}>WinUSB 驱动</div>
-            <div style={{ color: "#5a8fb5", fontSize: 12, marginTop: 1 }}>让 NexusPad 通过 USB 线连接手机（AOA 协议）</div>
+            <div style={{ color: "#003472", fontSize: 13, fontWeight: 500 }}>USB 驱动状态</div>
+            <div style={{ color: "#5a8fb5", fontSize: 12, marginTop: 1 }}>支持通过 USB 线直接连接手机（AOA 协议）</div>
           </div>
           {usbDriverOk === null ? (
             <div style={{ fontSize: 12, color: "#5a8fb5" }}>检测中...</div>
@@ -329,75 +329,61 @@ function GeneralTab() {
               background: "#dcfce7", border: "1px solid #86efac", borderRadius: 6,
               color: "#16a34a", fontSize: 12, padding: "3px 10px", fontWeight: 600,
             }}>
-              ✓ 可用
+              ✓ 正常
             </div>
           ) : (
             <div style={{
-              background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6,
-              color: "#dc2626", fontSize: 12, padding: "3px 10px", fontWeight: 600,
+              background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6,
+              color: "#d97706", fontSize: 12, padding: "3px 10px", fontWeight: 600,
             }}>
-              ✗ 需要安装
+              ⚠ 需要检查
             </div>
           )}
         </div>
-        {!usbDriverOk && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-            <div style={{ color: "#5a8fb5", fontSize: 12 }}>
-              USB 连接需要 WinUSB 驱动。请使用 Zadig 工具为手机安装 WinUSB 驱动：
-            </div>
-            <ol style={{ color: "#5a8fb5", fontSize: 12, margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-              <li>用 USB 线连接手机到电脑</li>
-              <li>打开 Zadig（以管理员身份运行）</li>
-              <li>选择手机的 USB 设备（Android Device）</li>
-              <li>将驱动替换为 WinUSB</li>
-              <li>点击 "Replace Driver" 安装</li>
-            </ol>
-            <button
-              onClick={() => open("https://zadig.akeo.ie/")}
-              style={{
-                background: "#fff", border: "1px solid rgba(0,98,171,0.2)",
-                borderRadius: 7, color: "#0062AB", fontSize: 12,
-                padding: "6px 12px", cursor: "pointer", alignSelf: "flex-start",
-                display: "inline-flex", alignItems: "center", gap: 5,
-                fontFamily: "system-ui, sans-serif",
-              }}
-            >
-              下载 Zadig
-            </button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+          <div style={{ color: "#5a8fb5", fontSize: 12 }}>
+            使用 USB 连接：
+          </div>
+          <ol style={{ color: "#5a8fb5", fontSize: 12, margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+            <li>用 USB 线连接手机到电脑</li>
+            <li>确保手机已开启 USB 调试</li>
+            <li>在手机端选择 USB 连接方式</li>
+          </ol>
+          <div style={{ display: "flex", gap: 8 }}>
             <button
               onClick={() => invoke("check_usb_driver").then((ok: any) => setUsbDriverOk(!!ok)).catch(() => setUsbDriverOk(false))}
               style={{
                 background: "#08A1F5", border: "none",
                 borderRadius: 7, color: "#fff", fontSize: 12,
-                padding: "6px 12px", cursor: "pointer", alignSelf: "flex-start",
+                padding: "6px 12px", cursor: "pointer",
                 fontFamily: "system-ui, sans-serif", fontWeight: 600,
               }}
             >
-              重新检测
+              刷新状态
             </button>
             <button
               onClick={() => invoke("diagnose_usb").then((r: any) => setUsbDiag(String(r))).catch((e) => setUsbDiag("诊断失败: " + e))}
               style={{
                 background: "#fff", border: "1px solid rgba(0,98,171,0.2)",
                 borderRadius: 7, color: "#0062AB", fontSize: 12,
-                padding: "6px 12px", cursor: "pointer", alignSelf: "flex-start",
+                padding: "6px 12px", cursor: "pointer",
                 fontFamily: "system-ui, sans-serif",
               }}
             >
-              USB 诊断
+              运行诊断
             </button>
-            {usbDiag && (
-              <pre style={{
-                background: "#fff", border: "1px solid rgba(0,98,171,0.15)",
-                borderRadius: 7, padding: "10px 12px", fontSize: 11,
-                color: "#003472", whiteSpace: "pre-wrap", lineHeight: 1.6,
-                fontFamily: "Consolas, monospace", maxHeight: 200, overflow: "auto",
-              }}>
-                {usbDiag}
-              </pre>
-            )}
           </div>
-        )}
+          {usbDiag && (
+            <pre style={{
+              background: "#fff", border: "1px solid rgba(0,98,171,0.15)",
+              borderRadius: 7, padding: "10px 12px", fontSize: 11,
+              color: "#003472", whiteSpace: "pre-wrap", lineHeight: 1.6,
+              fontFamily: "Consolas, monospace", maxHeight: 200, overflow: "auto",
+            }}>
+              {usbDiag}
+            </pre>
+          )}
+        </div>
       </SectionCard>
     </div>
   );

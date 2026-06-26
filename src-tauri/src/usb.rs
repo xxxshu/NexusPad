@@ -691,43 +691,18 @@ pub fn diagnose_usb() -> String {
     report
 }
 ///
-/// 检查 rusb 是否能枚举设备，以及能否打开 Android/AOA 设备
+/// 检查 USB 支持是否可用
+/// - 只要 libusb 能正常初始化，就返回 true
+/// - 用户可以直接尝试连接，不需要先安装复杂的驱动
 pub fn check_usb_driver() -> bool {
     match rusb::devices() {
         Ok(devices) => {
-            let mut found_android = false;
-            for device in devices.iter() {
-                let desc = match device.device_descriptor() {
-                    Ok(d) => d,
-                    Err(_) => continue,
-                };
-                let vid = desc.vendor_id();
-                let pid = desc.product_id();
-                if vid == 0 { continue; }
-                if ANDROID_VENDOR_IDS.contains(&vid) || is_aoa_pid(pid) {
-                    found_android = true;
-                    // 尝试打开设备——成功说明 WinUSB 驱动已装
-                    match device.open() {
-                        Ok(_) => {
-                            info!("USB driver check: device {:04X}:{:04X} opened OK", vid, pid);
-                            return true;
-                        }
-                        Err(e) => {
-                            warn!("USB driver check: device {:04X}:{:04X} open failed: {}", vid, pid, e);
-                            return false; // 找到设备但打不开 = 驱动问题
-                        }
-                    }
-                }
-            }
-            // 没有找到 Android 设备，但 rusb 本身可用（驱动正常）
-            if !found_android {
-                info!("USB driver check: rusb OK but no Android devices connected");
-            }
-            true
+            info!("USB check: libusb OK, found {} USB devices", devices.len());
+            true // libusb 工作正常，USB 功能可用
         }
         Err(e) => {
-            warn!("USB driver check: rusb not available: {}", e);
-            false // libusb 本身不可用
+            warn!("USB check: libusb not available: {}", e);
+            false // libusb 本身不可用，这才是真正的问题
         }
     }
 }
