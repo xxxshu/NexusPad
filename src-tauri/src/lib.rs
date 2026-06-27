@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::{broadcast, Mutex};
-use serde::Serialize;
 
 mod ble;
 mod codec;
@@ -17,6 +17,14 @@ mod usb;
 use config::AppConfig;
 use server::ServerState;
 
+/// Connection mode
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConnectionMode {
+    Wifi,
+    Usb,
+    Ble,
+}
+
 /// Tauri-managed app state
 pub struct AppState {
     server_state: Option<Arc<ServerState>>,
@@ -26,6 +34,7 @@ pub struct AppState {
     running: bool,
     config_path: PathBuf,
     config: AppConfig,
+    connection_mode: ConnectionMode,
 }
 
 #[derive(Serialize)]
@@ -38,6 +47,7 @@ pub struct ServerStatus {
     pub events: Vec<String>,
     pub device_name: Option<String>,
     pub pin: Option<String>,
+    pub connection_mode: String,
 }
 
 // ─── Tauri Commands ────────────────────────────────────────
@@ -61,6 +71,12 @@ async fn get_status(state: State<'_, Mutex<AppState>>) -> Result<ServerStatus, S
         None
     };
 
+    let connection_mode_str = match app.connection_mode {
+        ConnectionMode::Wifi => "wifi".to_string(),
+        ConnectionMode::Usb => "usb".to_string(),
+        ConnectionMode::Ble => "ble".to_string(),
+    };
+
     Ok(ServerStatus {
         running: app.running,
         ip,
@@ -70,7 +86,36 @@ async fn get_status(state: State<'_, Mutex<AppState>>) -> Result<ServerStatus, S
         events: Vec::new(),
         device_name,
         pin,
+        connection_mode: connection_mode_str,
     })
+}
+
+#[tauri::command]
+async fn get_connection_mode(state: State<'_, Mutex<AppState>>) -> Result<String, String> {
+    let app = state.lock().await;
+    Ok(match app.connection_mode {
+        ConnectionMode::Wifi => "wifi".to_string(),
+        ConnectionMode::Usb => "usb".to_string(),
+        ConnectionMode::Ble => "ble".to_string(),
+    })
+}
+
+#[tauri::command]
+async fn set_connection_mode(
+    state: State<'_, Mutex<AppState>>,
+    mode: String,
+) -> Result<(), String> {
+    let mut app = state.lock().await;
+    if app.running {
+        return Err("Cannot change connection mode while server is running".into());
+    }
+    app.connection_mode = match mode.as_str() {
+        "wifi" => ConnectionMode::Wifi,
+        "usb" => ConnectionMode::Usb,
+        "ble" => ConnectionMode::Ble,
+        _ => return Err("Invalid connection mode".into()),
+    };
+    Ok(())
 }
 
 #[tauri::command]
@@ -87,7 +132,10 @@ async fn start_server_cmd(
     let input_sim = match input::InputSimulator::new().await {
         Ok(sim) => sim,
         Err(e) => {
-            tracing::warn!("InputSimulator init failed (will retry on first input): {}", e);
+            tracing::warn!(
+                "InputSimulator init failed (will retry on first input): {}",
+                e
+            );
             input::InputSimulator::new_lazy()
         }
     };
@@ -112,7 +160,10 @@ async fn start_server_cmd(
             exe_dir.join("frontend"),
             exe_dir.join("..").join("frontend"),
             std::env::current_dir().unwrap_or_default().join("frontend"),
-            std::env::current_dir().unwrap_or_default().join("..").join("frontend"),
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("..")
+                .join("frontend"),
         ];
         let found = candidates.iter().find(|c| c.join("index.html").exists());
         if let Some(dir) = found {
@@ -132,27 +183,40 @@ async fn start_server_cmd(
 
     let state_clone = server_state.clone();
     let port_clone = port;
+    let connection_mode = app.connection_mode.clone();
 
-    // Start server in background
-    let server_handle = tokio::spawn(async move {
-        if let Err(e) = server::start_server(port_clone, state_clone, stop_rx).await {
-            tracing::error!("Server error: {}", e);
-        }
-    });
+    // Start server in background (for Wifi mode)
+    let server_handle = if matches!(connection_mode, ConnectionMode::Wifi) {
+        Some(tokio::spawn(async move {
+            if let Err(e) = server::start_server(port_clone, state_clone, stop_rx).await {
+                tracing::error!("Server error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
 
-    // Start USB AOA listener in background
-    let usb_state = server_state.clone();
-    let usb_stop_rx = stop_tx.subscribe();
-    let _usb_handle = tokio::spawn(async move {
-        usb::start_usb_listener(usb_state, usb_stop_rx).await;
-    });
+    // Start USB AOA listener in background (for USB mode)
+    let _usb_handle = if matches!(connection_mode, ConnectionMode::Usb) {
+        let usb_state = server_state.clone();
+        let usb_stop_rx = stop_tx.subscribe();
+        Some(tokio::spawn(async move {
+            usb::start_usb_listener(usb_state, usb_stop_rx).await;
+        }))
+    } else {
+        None
+    };
 
-    // Start BLE GATT Server in background
-    let ble_state = server_state.clone();
-    let ble_stop_rx = stop_tx.subscribe();
-    let _ble_handle = tokio::spawn(async move {
-        ble::start_ble_server(ble_state, ble_stop_rx).await;
-    });
+    // Start BLE GATT Server in background (for BLE mode)
+    let _ble_handle = if matches!(connection_mode, ConnectionMode::Ble) {
+        let ble_state = server_state.clone();
+        let ble_stop_rx = stop_tx.subscribe();
+        Some(tokio::spawn(async move {
+            ble::start_ble_server(ble_state, ble_stop_rx).await;
+        }))
+    } else {
+        None
+    };
 
     let ip = server::get_local_ip();
     let url = format!("http://{}:{}", ip, port);
@@ -161,9 +225,15 @@ async fn start_server_cmd(
 
     app.server_state = Some(server_state);
     app.stop_tx = Some(stop_tx);
-    app.server_handle = Some(server_handle);
+    app.server_handle = server_handle;
     app.port = port;
     app.running = true;
+
+    let connection_mode_str = match connection_mode {
+        ConnectionMode::Wifi => "wifi".to_string(),
+        ConnectionMode::Usb => "usb".to_string(),
+        ConnectionMode::Ble => "ble".to_string(),
+    };
 
     Ok(ServerStatus {
         running: true,
@@ -174,6 +244,7 @@ async fn start_server_cmd(
         events: Vec::new(),
         device_name: None,
         pin: Some(pin),
+        connection_mode: connection_mode_str,
     })
 }
 
@@ -187,10 +258,12 @@ async fn stop_server_cmd(state: State<'_, Mutex<AppState>>) -> Result<(), String
     // Close active WebSocket connection first
     if let Some(ref ss) = app.server_state {
         if let Some((_, tx)) = ss.active_ws.lock().await.take() {
-            let _ = tx.send(axum::extract::ws::Message::Close(Some(axum::extract::ws::CloseFrame {
-                code: 1000,
-                reason: "server stopped".into(),
-            })));
+            let _ = tx.send(axum::extract::ws::Message::Close(Some(
+                axum::extract::ws::CloseFrame {
+                    code: 1000,
+                    reason: "server stopped".into(),
+                },
+            )));
         }
         *ss.connected_device.lock().await = None;
     }
@@ -202,10 +275,7 @@ async fn stop_server_cmd(state: State<'_, Mutex<AppState>>) -> Result<(), String
     // Wait for server task to finish (releases the port)
     if let Some(handle) = app.server_handle.take() {
         drop(app); // release the lock while waiting
-        let _ = tokio::time::timeout(
-            tokio::time::Duration::from_secs(3),
-            handle,
-        ).await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(3), handle).await;
         // Re-acquire lock to finish cleanup
         let mut app = state.lock().await;
         if let Some(server_state) = app.server_state.take() {
@@ -249,7 +319,10 @@ async fn save_ime_config(
     config::save_config(&app.config_path, &app.config)?;
     // If server is running, the new config takes effect on next server start
     if app.server_state.is_some() {
-        tracing::info!("IME toggle key saved: {:?} (takes effect on next server start)", ime_toggle_key);
+        tracing::info!(
+            "IME toggle key saved: {:?} (takes effect on next server start)",
+            ime_toggle_key
+        );
     }
     Ok(())
 }
@@ -304,12 +377,17 @@ fn get_autostart(app: tauri::AppHandle) -> bool {
 #[tauri::command]
 fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
     use tauri_plugin_autostart::AutoLaunchManager;
-    let manager = app.try_state::<AutoLaunchManager>()
+    let manager = app
+        .try_state::<AutoLaunchManager>()
         .ok_or("Autostart plugin not initialized")?;
     if enable {
-        manager.enable().map_err(|e| format!("Failed to enable autostart: {}", e))?;
+        manager
+            .enable()
+            .map_err(|e| format!("Failed to enable autostart: {}", e))?;
     } else {
-        manager.disable().map_err(|e| format!("Failed to disable autostart: {}", e))?;
+        manager
+            .disable()
+            .map_err(|e| format!("Failed to disable autostart: {}", e))?;
     }
     Ok(())
 }
@@ -339,8 +417,14 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = app.get_webview_window("main").unwrap().set_focus();
+            let _ = app.get_webview_window("main").unwrap().show();
+        }))
         .setup(|app| {
-            let config_path = app.path().app_config_dir()
+            let config_path = app
+                .path()
+                .app_config_dir()
                 .unwrap_or_else(|_| PathBuf::from("."));
             let loaded_config = config::load_config(&config_path);
             app.manage(Mutex::new(AppState {
@@ -351,11 +435,12 @@ pub fn run() {
                 running: false,
                 config_path,
                 config: loaded_config,
+                connection_mode: ConnectionMode::Wifi,
             }));
 
             // ── System Tray ──────────────────────────────
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
-            use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
             let show_item = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
@@ -367,19 +452,17 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("NexusPad")
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "show" => {
-                            if let Some(win) = app.get_webview_window("main") {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -404,7 +487,9 @@ pub fn run() {
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     // Check minimize_to_tray setting
-                    let minimize = if let Some(state) = app_handle.try_state::<tokio::sync::Mutex<AppState>>() {
+                    let minimize = if let Some(state) =
+                        app_handle.try_state::<tokio::sync::Mutex<AppState>>()
+                    {
                         state.blocking_lock().config.minimize_to_tray
                     } else {
                         true // default: minimize to tray
@@ -421,6 +506,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
+            get_connection_mode,
+            set_connection_mode,
             start_server_cmd,
             stop_server_cmd,
             get_ime_config,
@@ -443,11 +530,13 @@ pub fn run() {
 pub fn run_cli() {
     tracing_subscriber::fmt::init();
     let args: Vec<String> = std::env::args().collect();
-    let port: u16 = args.windows(2)
+    let port: u16 = args
+        .windows(2)
         .find(|w| w[0] == "--port")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(8765);
-    let ime_key_arg: Option<String> = args.windows(2)
+    let ime_key_arg: Option<String> = args
+        .windows(2)
         .find(|w| w[0] == "--ime-key")
         .map(|w| w[1].clone());
 
@@ -476,7 +565,12 @@ pub fn run_cli() {
 
         let frontend_dir = exe_dir.clone();
         let ime_toggle_key = app_config.ime_toggle_key.clone();
-        let server_state = Arc::new(server::ServerState::new(input_sim, frontend_dir, ime_toggle_key, None));
+        let server_state = Arc::new(server::ServerState::new(
+            input_sim,
+            frontend_dir,
+            ime_toggle_key,
+            None,
+        ));
         let pin = server_state.pin.lock().await.clone();
         let local_ip = server::get_local_ip();
         let url = format!("http://{}:{}", local_ip, port);

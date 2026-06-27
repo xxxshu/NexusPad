@@ -198,10 +198,16 @@ fn start_accessory(handle: &rusb::DeviceHandle<rusb::GlobalContext>) -> Result<u
 /// 2. 发送 Start Accessory 命令
 /// 3. 设备将重新枚举为 AOA Accessory
 fn perform_aoa_handshake(device: &rusb::Device<rusb::GlobalContext>) -> Result<()> {
+    info!(
+        "AOA: Attempting handshake with device VID:PID 0x{:04X}:0x{:04X}",
+        device.device_descriptor()?.vendor_id(),
+        device.device_descriptor()?.product_id()
+    );
     // 尝试打开设备——可能因 Windows MTP/ADB 驱动占用而失败
     let handle = match device.open() {
         Ok(h) => h,
         Err(rusb::Error::Access) => {
+            warn!("AOA: Access denied trying to open device directly, trying interfaces...");
             // 回退：尝试逐个接口打开
             let desc = device.device_descriptor()?;
             for iface_idx in 0..desc.num_configurations() {
@@ -237,22 +243,37 @@ fn perform_aoa_handshake(device: &rusb::Device<rusb::GlobalContext>) -> Result<(
 }
 
 fn perform_aoa_with_handle(handle: &rusb::DeviceHandle<rusb::GlobalContext>) -> Result<()> {
-    // 某些设备需要先 detach kernel driver
+    info!("AOA: Starting handshake procedure...");
+    // 某些设备需要先设置配置和 detach kernel driver
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
+        info!("AOA: Trying to set config 0 and detach kernel driver...");
+        let _ = handle.set_active_configuration(0);
         let _ = handle.detach_kernel_driver(0);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        info!("AOA: Trying to set active configuration to 0...");
+        let _ = handle.set_active_configuration(0);
     }
 
     info!("AOA handshake: setting accessory strings...");
     set_aoa_string(&handle, AOA_STRING_MANUFACTURER, AOA_MANUFACTURER)?;
+    info!("AOA: Set manufacturer string");
     set_aoa_string(&handle, AOA_STRING_MODEL, AOA_MODEL)?;
+    info!("AOA: Set model string");
     set_aoa_string(&handle, AOA_STRING_DESCRIPTION, AOA_DESCRIPTION)?;
+    info!("AOA: Set description string");
     set_aoa_string(&handle, AOA_STRING_VERSION, AOA_VERSION)?;
+    info!("AOA: Set version string");
     set_aoa_string(&handle, AOA_STRING_URL, AOA_URL)?;
+    info!("AOA: Set URL string");
     set_aoa_string(&handle, AOA_STRING_SERIAL, AOA_SERIAL)?;
+    info!("AOA: Set serial string");
 
     info!("AOA handshake: starting accessory mode...");
     start_accessory(&handle)?;
+    info!("AOA: Start accessory command sent!");
 
     Ok(())
 }
@@ -364,14 +385,15 @@ pub async fn start_usb_listener(state: Arc<ServerState>, mut stop_rx: broadcast:
                 info!("Android device found: {} — initiating AOA handshake", name);
                 match perform_aoa_handshake(&device) {
                     Ok(()) => {
-                        info!("AOA handshake sent, waiting for device re-enumeration...");
-                        // 等待设备重新枚举为 AOA Accessory
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        info!("AOA handshake sent, waiting for device re-enumeration (5s)...");
+                        // 等待设备重新枚举为 AOA Accessory — 延长等待时间
+                        tokio::time::sleep(Duration::from_secs(5)).await;
 
                         // 重新扫描查找 AOA 设备
+                        info!("Scanning for AOA device after handshake...");
                         match find_aoa_device() {
                             Ok(Some((aoa_device, aoa_name))) => {
-                                info!("AOA device ready: {}", aoa_name);
+                                info!("✅ AOA device ready: {}", aoa_name);
                                 if let Err(e) =
                                     handle_aoa_device(aoa_device, aoa_name, &state, &mut stop_rx)
                                         .await
@@ -380,7 +402,10 @@ pub async fn start_usb_listener(state: Arc<ServerState>, mut stop_rx: broadcast:
                                 }
                             }
                             Ok(None) => {
-                                warn!("AOA handshake sent but device not re-enumerated");
+                                warn!("⚠️ AOA handshake sent but device not re-enumerated");
+                                warn!(
+                                    "Check if your phone supports AOA and USB debugging is enabled"
+                                );
                             }
                             Err(e) => {
                                 warn!("Post-handshake scan error: {}", e);
@@ -417,8 +442,19 @@ async fn handle_aoa_device(
     state: &Arc<ServerState>,
     stop_rx: &mut broadcast::Receiver<()>,
 ) -> Result<()> {
+    info!("Handling AOA device: {}", device_name);
+
     // 打开设备并查找端点
-    let mut handle = device.open()?;
+    let mut handle = match device.open() {
+        Ok(h) => {
+            info!("Successfully opened AOA device");
+            h
+        }
+        Err(e) => {
+            warn!("Failed to open AOA device directly: {}", e);
+            return Err(anyhow!("Failed to open AOA device: {}", e));
+        }
+    };
 
     // Detach kernel driver if needed
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -426,9 +462,18 @@ async fn handle_aoa_device(
         let _ = handle.detach_kernel_driver(0);
     }
 
-    // Claim interface 0
-    handle.claim_interface(0)?;
+    // Set active configuration first
+    info!("Setting active configuration 0...");
+    let _ = handle.set_active_configuration(0);
 
+    // Claim interface 0
+    info!("Claiming interface 0...");
+    match handle.claim_interface(0) {
+        Ok(_) => info!("Interface 0 claimed successfully"),
+        Err(e) => warn!("Failed to claim interface 0, continuing anyway: {}", e),
+    }
+
+    info!("Finding bulk endpoints...");
     let (bulk_in, bulk_out, _max_packet) = find_bulk_endpoints(&device)?;
 
     // 创建发送通道

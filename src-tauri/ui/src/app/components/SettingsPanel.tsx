@@ -87,6 +87,8 @@ function GeneralTab() {
   const [vigemInstalled, setVigemInstalled] = useState<boolean | null>(null);
   const [usbDriverOk, setUsbDriverOk] = useState<boolean | null>(null);
   const [usbDiag, setUsbDiag] = useState<string | null>(null);
+  const [connectionMode, setConnectionMode] = useState("wifi");
+  const [isRunning, setIsRunning] = useState(false);
 
   const inputStyle: React.CSSProperties = {
     background: "#fff",
@@ -104,19 +106,24 @@ function GeneralTab() {
   useEffect(() => {
     invoke("get_status").then((s: any) => {
       if (s.port) setPort(String(s.port));
-    }).catch(() => {});
+      setIsRunning(!!s.running);
+      if (s.connection_mode) setConnectionMode(s.connection_mode);
+    }).catch(() => { });
+    invoke("get_connection_mode").then((mode: any) => {
+      setConnectionMode(mode);
+    }).catch(() => { });
     invoke("get_ime_config").then((cfg: any) => {
       const key = cfg.ime_toggle_key || "";
       setImeKey(key);
       const isPreset = ["", "shift", "ctrl+space", "Caps_Lock"].includes(key);
       if (!isPreset && key) setImeCustom(key);
-    }).catch(() => {});
+    }).catch(() => { });
     invoke("get_autostart").then((enabled: any) => {
       setAutoStart(!!enabled);
-    }).catch(() => {});
+    }).catch(() => { });
     invoke("get_minimize_to_tray").then((enabled: any) => {
       setMinimizeToTray(!!enabled);
-    }).catch(() => {});
+    }).catch(() => { });
     invoke("check_vigem_installed").then((installed: any) => {
       setVigemInstalled(!!installed);
     }).catch(() => { setVigemInstalled(false); });
@@ -124,6 +131,15 @@ function GeneralTab() {
       setUsbDriverOk(!!ok);
     }).catch(() => { setUsbDriverOk(false); });
   }, []);
+
+  async function handleModeChange(mode: string) {
+    try {
+      await invoke("set_connection_mode", { mode });
+      setConnectionMode(mode);
+    } catch (e) {
+      console.error("Failed to set connection mode:", e);
+    }
+  }
 
   // Port change handler
   function handlePortChange(val: string) {
@@ -158,6 +174,51 @@ function GeneralTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <SectionCard>
+        <SectionLabel label="连接模式" />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ color: "#5a8fb5", fontSize: 12 }}>选择一种连接方式与手机连接</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {[
+              { mode: "wifi", label: "Wi-Fi", icon: "📶" },
+              { mode: "usb", label: "USB", icon: "🔌" },
+              { mode: "ble", label: "蓝牙", icon: "📻" },
+            ].map((p) => (
+              <button
+                key={p.mode}
+                onClick={() => handleModeChange(p.mode)}
+                disabled={isRunning}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 14px",
+                  border: connectionMode === p.mode ? "1px solid #08A1F5" : "1px solid rgba(0,98,171,0.15)",
+                  borderRadius: 8,
+                  background: connectionMode === p.mode ? "#EBF6FF" : "#fff",
+                  color: connectionMode === p.mode ? "#003472" : "#5a8fb5",
+                  fontSize: 13,
+                  fontWeight: connectionMode === p.mode ? 600 : 500,
+                  cursor: isRunning ? "not-allowed" : "pointer",
+                  transition: "all .15s",
+                  fontFamily: "system-ui, sans-serif",
+                  opacity: isRunning ? 0.5 : 1,
+                }}
+              >
+                <span style={{ fontSize: 16 }}>{p.icon}</span>
+                <span>{p.label}</span>
+                {connectionMode === p.mode && (
+                  <span style={{ marginLeft: "auto", color: "#08A1F5" }}>●</span>
+                )}
+              </button>
+            ))}
+          </div>
+          {isRunning && (
+            <div style={{ color: "#e53e3e", fontSize: 12 }}>连接模式切换需要先停止服务</div>
+          )}
+        </div>
+      </SectionCard>
+
       <SectionCard>
         <SectionLabel label="端口设置" />
         <Row label="监听端口" hint="重启服务后生效">
@@ -264,7 +325,7 @@ function GeneralTab() {
         <div style={{ height: 1, background: "rgba(0,98,171,0.08)" }} />
         <Row label="关闭时最小化到托盘" hint="关闭按钮不退出程序">
           <Toggle checked={minimizeToTray} onChange={async (v) => {
-            try { await invoke("set_minimize_to_tray", { enable: v }); setMinimizeToTray(v); } catch {}
+            try { await invoke("set_minimize_to_tray", { enable: v }); setMinimizeToTray(v); } catch { }
           }} />
         </Row>
       </SectionCard>
@@ -401,7 +462,7 @@ function AboutTab() {
   const [contact, setContact] = useState("");
 
   useEffect(() => {
-    invoke("app_version").then((v: any) => setVersion(v)).catch(() => {});
+    invoke("app_version").then((v: any) => setVersion(v)).catch(() => { });
   }, []);
 
   const linkBtn: React.CSSProperties = {
