@@ -7,6 +7,7 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { PinButtonModule, PinModuleHandle } from "./components/PinButtonModule";
 import { StatusIndicator } from "./components/StatusIndicator";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ModeSwitcher, ConnMode } from "./components/ModeSwitcher";
 
 function WindowControls() {
   const btnStyle: React.CSSProperties = {
@@ -18,15 +19,15 @@ function WindowControls() {
   const win = getCurrentWindow();
   return (
     <div style={{ display: "flex", gap: 2, marginLeft: 8 }}>
-      <button style={btnStyle} onClick={() => win.minimize().catch(() => {})}
+      <button style={btnStyle} onClick={() => win.minimize().catch(() => { })}
         onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,98,171,0.08)"; e.currentTarget.style.color = "#003472"; }}
         onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#5a8fb5"; }}
         title="最小化"><Minus size={14} /></button>
-      <button style={btnStyle} onClick={() => win.toggleMaximize().catch(() => {})}
+      <button style={btnStyle} onClick={() => win.toggleMaximize().catch(() => { })}
         onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,98,171,0.08)"; e.currentTarget.style.color = "#003472"; }}
         onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#5a8fb5"; }}
         title="最大化"><Square size={12} /></button>
-      <button style={{ ...btnStyle }} onClick={() => win.close().catch(() => {})}
+      <button style={{ ...btnStyle }} onClick={() => win.close().catch(() => { })}
         onMouseEnter={e => { e.currentTarget.style.background = "#e53e3e"; e.currentTarget.style.color = "#fff"; }}
         onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#5a8fb5"; }}
         title="关闭"><X size={14} /></button>
@@ -67,6 +68,8 @@ export default function App() {
   const [view, setView] = useState<"main" | "settings">("main");
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState<string | undefined>();
+  const [connectionMode, setConnectionMode] = useState<ConnMode>("wifi");
+  const [serverRunning, setServerRunning] = useState(false);
   const pinRef = useRef<PinModuleHandle>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
@@ -89,14 +92,14 @@ export default function App() {
 
       if (Math.abs(diff) <= 2) {
         currentLogicalHRef.current = target;
-        winRef.current.setSize(new LogicalSize(420, target)).catch(() => {});
+        winRef.current.setSize(new LogicalSize(420, target)).catch(() => { });
         animRef.current = null;
         return;
       }
 
       const next = Math.round(current + diff * 0.35);
       currentLogicalHRef.current = next;
-      winRef.current.setSize(new LogicalSize(420, next)).catch(() => {});
+      winRef.current.setSize(new LogicalSize(420, next)).catch(() => { });
       animRef.current = requestAnimationFrame(step);
     };
 
@@ -125,6 +128,32 @@ export default function App() {
     setView(newView);
   }, []);
 
+  // Load saved connection mode on mount
+  useEffect(() => {
+    invoke("get_connection_mode")
+      .then((mode: any) => setConnectionMode(mode as ConnMode))
+      .catch(() => { });
+  }, []);
+
+  // Change connection mode (only allowed while server is idle)
+  const handleModeChange = useCallback(async (mode: ConnMode) => {
+    if (serverRunning) return;
+    try {
+      await invoke("set_connection_mode", { mode });
+      setConnectionMode(mode);
+    } catch (e) {
+      console.error("Failed to set connection mode:", e);
+    }
+  }, [serverRunning]);
+
+  // Track whether the service is running (used to lock the mode switcher)
+  const handlePinStateChange = useCallback(
+    (state: "idle" | "qr" | "pin" | "wait" | "done") => {
+      setServerRunning(state !== "idle");
+    },
+    []
+  );
+
   // Poll for status
   const pollStatus = useCallback(async () => {
     try {
@@ -136,7 +165,7 @@ export default function App() {
         }
         if (status.pin) pinRef.current?.updatePin(status.pin);
       }
-    } catch {}
+    } catch { }
   }, []);
 
   // Listen to Tauri server events
@@ -147,7 +176,7 @@ export default function App() {
       pinRef.current?.showPIN();
       invoke("get_status").then((s: any) => {
         if (s.pin) pinRef.current?.updatePin(s.pin);
-      }).catch(() => {});
+      }).catch(() => { });
     }).then(fn => unlistenFns.push(fn));
 
     listen("device-authenticated", (event: any) => {
@@ -300,7 +329,13 @@ export default function App() {
             pointerEvents: isSettings ? "none" : "auto",
           }}
         >
-          <PinButtonModule ref={pinRef} onStopped={() => { setConnected(false); setDeviceName(undefined); }} />
+          <ModeSwitcher value={connectionMode} onChange={handleModeChange} disabled={serverRunning} />
+          <PinButtonModule
+            ref={pinRef}
+            connectionMode={connectionMode}
+            onStateChange={handlePinStateChange}
+            onStopped={() => { setConnected(false); setDeviceName(undefined); }}
+          />
           <StatusIndicator connected={connected} deviceName={deviceName} />
         </div>
 
@@ -333,7 +368,7 @@ export default function App() {
         }}
       >
         <span style={{ color: "#c5dff0", fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-          NexusPad v0.5.0
+          NexusPad v0.9.2
         </span>
       </div>
     </div>

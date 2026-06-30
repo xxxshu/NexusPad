@@ -162,17 +162,63 @@ async fn run_windows_ble_server(
         Ok(())
     }))?;
 
-    // 5. 开始广播
+    // 5. 监听订阅状态变化 — 用作连接/断开检测
+    //    手机订阅 TX Notify 时 SubscribedClients > 0 → 已连接
+    //    断开时归零 → 已断开
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let connected_flag = Arc::new(AtomicBool::new(false));
+    let state_sub = state.clone();
+    let flag_sub = connected_flag.clone();
+    let rt = tokio::runtime::Handle::current();
+    tx_char.SubscribedClientsChanged(&TypedEventHandler::<
+        GattLocalCharacteristic,
+        windows::core::IInspectable,
+    >::new(move |sender, _args| {
+        if let Some(sender) = sender.as_ref() {
+            let count = sender.SubscribedClients()?.Size()?;
+            let was = flag_sub.load(Ordering::SeqCst);
+            if count > 0 && !was {
+                flag_sub.store(true, Ordering::SeqCst);
+                let device_name = "蓝牙设备".to_string();
+                let st = state_sub.clone();
+                let dn = device_name.clone();
+                rt.spawn(async move {
+                    *st.ble_device_name.lock().await = Some(dn);
+                    st.push_ime_status().await;
+                });
+                state_sub.send_event("✅ 蓝牙设备已连接".to_string());
+                state_sub.emit_gui_event(
+                    "device-authenticated",
+                    serde_json::json!({ "device_name": device_name }),
+                );
+            } else if count == 0 && was {
+                flag_sub.store(false, Ordering::SeqCst);
+                let st = state_sub.clone();
+                rt.spawn(async move {
+                    *st.ble_device_name.lock().await = None;
+                });
+                state_sub.send_event("❌ 蓝牙设备已断开".to_string());
+                state_sub.emit_gui_event(
+                    "device-disconnected",
+                    serde_json::json!({ "device_name": "蓝牙设备" }),
+                );
+            }
+        }
+        Ok(())
+    }))?;
+    info!("BLE: subscribed-clients listener registered");
+
+    // 6. 开始广播
     let mut adv_params = GattServiceProviderAdvertisingParameters::new()?;
     adv_params.SetIsConnectable(true)?;
     adv_params.SetIsDiscoverable(true)?;
     provider.StartAdvertisingWithParameters(&adv_params)?;
     info!("BLE GATT Server: advertising as 'NexusPad'");
 
-    // 6. 等待停止信号
+    // 7. 等待停止信号
     stop_rx.recv().await.ok();
 
-    // 7. 停止广播
+    // 8. 停止广播
     provider.StopAdvertising()?;
     info!("BLE GATT Server: advertising stopped");
 

@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # NOTE: tag-push auto-trigger temporarily disabled. Windows + Android packages
+  # are built and uploaded locally for now, and Linux packaging is on hold.
+  # Re-enable the `push: tags` block below to resume CI-driven releases.
+  # push:
+  #   tags:
+  #     - 'v*'
   workflow_dispatch:
 
 permissions:

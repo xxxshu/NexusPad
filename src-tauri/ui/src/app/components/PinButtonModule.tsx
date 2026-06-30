@@ -10,19 +10,30 @@ export interface PinModuleHandle {
   updatePin: (pin: string) => void;
 }
 
+export type ConnMode = "wifi" | "usb" | "ble";
+
 interface PinModuleProps {
-  onStateChange?: (state: "idle" | "qr" | "pin" | "done") => void;
+  onStateChange?: (state: "idle" | "qr" | "pin" | "wait" | "done") => void;
   onStopped?: () => void;
+  /** 当前连接模式 — wifi 走二维码/PIN 流程，usb/ble 走等待连接流程 */
+  connectionMode?: ConnMode;
 }
 
-export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(function PinButtonModule({ onStateChange, onStopped }, ref) {
+export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(function PinButtonModule({ onStateChange, onStopped, connectionMode = "wifi" }, ref) {
   const boxRef = useRef<HTMLDivElement>(null);
   const hintRef = useRef<HTMLDivElement>(null);
-  const stateRef = useRef<"idle" | "toQR" | "qr" | "toPIN" | "pin" | "toDone" | "done">("idle");
+  const stateRef = useRef<"idle" | "toQR" | "qr" | "toPIN" | "pin" | "toWait" | "wait" | "toDone" | "done">("idle");
   const busyRef = useRef(false);
   const breathTweensRef = useRef<gsap.core.Tween[]>([]);
   const currentPinRef = useRef("------");
   const qrSvgRef = useRef("");
+  // 连接模式（用 ref 以便在只初始化一次的事件处理器中读取最新值）
+  const modeRef = useRef<ConnMode>(connectionMode);
+
+  // 保持 modeRef 与 prop 同步
+  useEffect(() => {
+    modeRef.current = connectionMode;
+  }, [connectionMode]);
 
   useEffect(() => {
     const box = boxRef.current!;
@@ -34,9 +45,11 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
     const BTN_BLUE = "#3283FF";
     const BTN_RED = "#e53e3e";
 
-    function notifyState(state: "idle" | "qr" | "pin" | "done") {
+    function notifyState(state: "idle" | "qr" | "pin" | "wait" | "done") {
       if (onStateChange) onStateChange(state);
     }
+
+    let waitPulseTween: gsap.core.Tween | null = null;
 
     function setBoxInstant(w: number, h: number, bg: string, ov?: string) {
       box.style.transition = "none";
@@ -79,7 +92,7 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
       setBoxInstant(RW, RH, BTN_BLUE, "visible");
       const qrContent = qrSvgRef.current
         ? '<div class="qr-wrap" style="width:120px;height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">' +
-          qrSvgRef.current + '</div>'
+        qrSvgRef.current + '</div>'
         : '<div style="color:#fff;font-size:14px">Loading QR...</div>';
 
       box.innerHTML =
@@ -122,6 +135,32 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
       box.innerHTML =
         '<span id="label" style="color:#fff;font-size:22px;font-weight:600;letter-spacing:3px;text-transform:uppercase;opacity:0;">Stop</span>';
       gsap.to("#label", { opacity: 1, duration: 0.35 });
+    }
+
+    // 等待连接状态（USB / 蓝牙模式）— 蓝色按钮，文字呼吸闪烁
+    function renderWaiting() {
+      setBoxInstant(RW, RH, BTN_BLUE);
+      box.innerHTML =
+        '<span id="waitLabel" style="color:#fff;font-size:18px;font-weight:600;letter-spacing:2px;opacity:0;">等待设备连接</span>';
+      gsap.to("#waitLabel", { opacity: 1, duration: 0.35 });
+    }
+
+    function startWaitPulse() {
+      stopWaitPulse();
+      waitPulseTween = gsap.to("#waitLabel", {
+        opacity: 0.4,
+        duration: 0.9,
+        yoyo: true,
+        repeat: -1,
+        ease: "sine.inOut",
+      });
+    }
+
+    function stopWaitPulse() {
+      if (waitPulseTween) {
+        waitPulseTween.kill();
+        waitPulseTween = null;
+      }
     }
 
     function startBreathing() {
@@ -260,10 +299,12 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
 
     function startToStop() {
       if (busyRef.current) return;
+      const fromWait = stateRef.current === "wait" || stateRef.current === "toWait";
       busyRef.current = true;
       stateRef.current = "toDone";
       hint.style.opacity = "0";
-      cursorErase().then(() => {
+
+      const finish = () => {
         renderStop();
         gsap.from(box, { backgroundColor: BTN_BLUE, duration: 0.45, ease: "power2.out" });
         setTimeout(() => {
@@ -273,12 +314,42 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
           busyRef.current = false;
           notifyState("done");
         }, 350);
-      });
+      };
+
+      if (fromWait) {
+        // USB / 蓝牙：从等待状态直接淡入 STOP（无 PIN 光标动画）
+        stopWaitPulse();
+        gsap.to("#waitLabel", { opacity: 0, duration: 0.25, onComplete: finish });
+      } else {
+        // 局域网：先擦除 PIN 光标，再切到 STOP
+        cursorErase().then(finish);
+      }
+    }
+
+    // USB / 蓝牙：START → 等待连接状态
+    function startToWaiting() {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      stateRef.current = "toWait";
+      hint.style.opacity = "0";
+      gsap.to("#label", { opacity: 0, duration: 0.25 });
+      setTimeout(() => {
+        renderWaiting();
+        setTimeout(() => {
+          stateRef.current = "wait";
+          hint.textContent = "在手机端发起连接";
+          hint.style.opacity = "1";
+          busyRef.current = false;
+          startWaitPulse();
+          notifyState("wait");
+        }, 360);
+      }, 280);
     }
 
     function startReset() {
       if (busyRef.current) return;
       busyRef.current = true;
+      stopWaitPulse();
       gsap.to("#label", { opacity: 0, duration: 0.25 });
       setTimeout(() => {
         renderIdle();
@@ -303,6 +374,7 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
 
       // Stop any active animations
       stopBreathing();
+      stopWaitPulse();
 
       function onResetComplete() {
         stateRef.current = "idle";
@@ -324,15 +396,29 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
             setTimeout(onResetComplete, 300);
           }
         })
-        .to(box, { width: RW, height: RH, borderRadius: BR, backgroundColor: BTN_BLUE, duration: 0.5, ease: "power2.inOut" }, 0)
-        .set(box, { overflow: "hidden" }, 0)
-        .to(fillEl, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.inOut" }, 0);
+          .to(box, { width: RW, height: RH, borderRadius: BR, backgroundColor: BTN_BLUE, duration: 0.5, ease: "power2.inOut" }, 0)
+          .set(box, { overflow: "hidden" }, 0)
+          .to(fillEl, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.inOut" }, 0);
       } else if (s === "pin" || s === "toPIN") {
         cursorErase().then(() => {
           renderIdle();
           gsap.from(box, { backgroundColor: BTN_BLUE, duration: 0.35, ease: "power2.out" });
           setTimeout(onResetComplete, 300);
         });
+      } else if (s === "wait" || s === "toWait") {
+        // USB / 蓝牙等待状态 → START（蓝→蓝，仅淡出文字）
+        const wl = document.getElementById("waitLabel");
+        if (wl) {
+          gsap.to(wl, {
+            opacity: 0, duration: 0.25, onComplete: () => {
+              renderIdle();
+              setTimeout(onResetComplete, 300);
+            }
+          });
+        } else {
+          renderIdle();
+          setTimeout(onResetComplete, 300);
+        }
       } else {
         gsap.to("#label", { opacity: 0, duration: 0.2 });
         setTimeout(() => {
@@ -344,7 +430,7 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
     }
 
     // Store transitions for useImperativeHandle
-    (box as any).__transitions = { startToQR, startToPIN, startToStop, startReset, resetFromAny };
+    (box as any).__transitions = { startToQR, startToPIN, startToStop, startToWaiting, startReset, resetFromAny };
 
     // ── Click handler ──
     async function handleClick() {
@@ -363,7 +449,7 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
             setTimeout(() => { hint.style.color = "#5a8fb5"; hint.textContent = "点击开启服务"; }, 3000);
             return;
           }
-        } catch {}
+        } catch { }
 
         hint.textContent = "启动中...";
         hint.style.opacity = "1";
@@ -371,14 +457,24 @@ export const PinButtonModule = forwardRef<PinModuleHandle, PinModuleProps>(funct
           const status: any = await invoke("start_server_cmd", { port });
           qrSvgRef.current = status.qr_svg || "";
           if (status.pin) currentPinRef.current = status.pin;
-          startToQR();
+          // 按连接模式分流：局域网走二维码/PIN，USB/蓝牙走等待连接
+          if (modeRef.current === "wifi") {
+            startToQR();
+          } else {
+            startToWaiting();
+          }
         } catch (e: any) {
           hint.textContent = typeof e === "string" ? e : "启动失败";
           hint.style.color = "#e53e3e";
           setTimeout(() => { hint.textContent = "点击开启服务"; hint.style.color = "#5a8fb5"; }, 3000);
         }
+      } else if (s === "wait") {
+        // USB / 蓝牙等待连接时再次点击 = 取消并停止服务
+        try { await invoke("stop_server_cmd"); } catch { }
+        onStopped?.();
+        resetFromAny();
       } else if (s === "done") {
-        try { await invoke("stop_server_cmd"); } catch {}
+        try { await invoke("stop_server_cmd"); } catch { }
         onStopped?.();
         startReset();
       }
