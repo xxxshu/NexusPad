@@ -35,3 +35,6 @@ src-tauri/ui/dist/
 
 # Figma Make design reference
 Design Desktop GUI for NexusPad/
+
+# Local release artifacts (published via GitHub Releases, not tracked in git)
+/releases/
