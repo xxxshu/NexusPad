@@ -73,7 +73,7 @@ const AOA_SERIAL: &str = "NP-001";
 // ─── 设备检测 ──────────────────────────────────────────────
 
 /// 检查是否为已知的 AOA Product ID
-fn is_aoa_pid(pid: u16) -> bool {
+pub fn is_aoa_pid(pid: u16) -> bool {
     matches!(
         pid,
         AOA_PID_ACCESSORY
@@ -769,6 +769,126 @@ pub fn diagnose_usb() -> String {
     report
 }
 ///
+/// 尝试为检测到的 Android/AOA 设备安装 WinUSB 驱动（Windows only）
+#[cfg(target_os = "windows")]
+pub fn install_usb_driver() -> Result<String, String> {
+    use std::process::Command;
+    
+    // 检查是否有需要驱动修复的设备
+    let devices = match rusb::devices() {
+        Ok(d) => d,
+        Err(e) => return Err(format!("libusb 不可用: {}", e)),
+    };
+    
+    let mut aoa_devices = Vec::new();
+    let mut android_devices = Vec::new();
+    let mut has_working_driver = false;
+    
+    for device in devices.iter() {
+        let desc = match device.device_descriptor() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        
+        let vid = desc.vendor_id();
+        let pid = desc.product_id();
+        
+        if ANDROID_VENDOR_IDS.contains(&vid) {
+            let is_aoa = is_aoa_pid(pid);
+            let device_desc = format!("{:04X}:{:04X}", vid, pid);
+            
+            // 检查设备状态
+            match device.open() {
+                Ok(_) => {
+                    // 可以打开，驱动正常
+                    if is_aoa {
+                        has_working_driver = true;
+                    }
+                }
+                Err(rusb::Error::Access) => {
+                    // 权限不足，需要驱动
+                    if is_aoa {
+                        aoa_devices.push(format!("{} (AOA模式)", device_desc));
+                    } else {
+                        android_devices.push(format!("{} (Android模式)", device_desc));
+                    }
+                }
+                Err(e) => {
+                    // 其他错误
+                    if is_aoa {
+                        aoa_devices.push(format!("{} (AOA模式) - {}", device_desc, e));
+                    } else {
+                        android_devices.push(format!("{} (Android模式) - {}", device_desc, e));
+                    }
+                }
+            }
+        }
+    }
+    
+    // 构建响应
+    let mut response = String::new();
+    response.push_str("=== USB 驱动修复指导 ===\n\n");
+    
+    if has_working_driver {
+        response.push_str("✅ 已有正常工作的 AOA 设备驱动\n\n");
+    }
+    
+    if !aoa_devices.is_empty() {
+        response.push_str(&format!("⚠ 发现 {} 个无法访问的 AOA 设备:\n", aoa_devices.len()));
+        for dev in &aoa_devices {
+            response.push_str(&format!("  - {}\n", dev));
+        }
+        response.push_str("\n");
+    }
+    
+    if !android_devices.is_empty() {
+        response.push_str(&format!("⚠ 发现 {} 个无法访问的 Android 设备:\n", android_devices.len()));
+        for dev in &android_devices {
+            response.push_str(&format!("  - {}\n", dev));
+        }
+        response.push_str("\n");
+    }
+    
+    if aoa_devices.is_empty() && android_devices.is_empty() && !has_working_driver {
+        response.push_str("未发现需要驱动修复的 Android/AOA 设备\n");
+        return Ok(response);
+    }
+    
+    // 提供具体解决方案
+    response.push_str("📱 解决方案:\n\n");
+    
+    if !aoa_devices.is_empty() {
+        response.push_str("针对 AOA 设备 (如 18D1:2D01):\n");
+        response.push_str("1. 手机切换到「仅充电」模式\n");
+        response.push_str("2. 下载 Zadig: https://zadig.akeo.ie/\n");
+        response.push_str("3. 运行 Zadig → Options → List All Devices\n");
+        response.push_str("4. 从列表中找到「Android」或「NexusPad」设备\n");
+        response.push_str("5. 驱动选择 WinUSB (libusb-win32)\n");
+        response.push_str("6. 点击 Replace Driver\n");
+        response.push_str("7. 完成后可能需要拔插 USB 线\n\n");
+    }
+    
+    if !android_devices.is_empty() {
+        response.push_str("针对 Android 设备 (如 22D9:2765):\n");
+        response.push_str("1. 手机切换到「文件传输」或「仅充电」模式\n");
+        response.push_str("2. 或者可以尝试其他模式\n");
+        response.push_str("3. 如果仍然无法连接，可能设备不支持直接 AOA 访问\n\n");
+    }
+    
+    response.push_str("💡 关键提示:\n");
+    response.push_str("- 不同设备可能需要不同的 USB 模式\n");
+    response.push_str("- 建议尝试所有可用的 USB 模式\n");
+    response.push_str("- 「仅充电」模式通常更容易成功\n");
+    response.push_str("- 某些设备需要在手机设置中手动开启「USB 调试」\n");
+    
+    Ok(response)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn install_usb_driver() -> Result<String, String> {
+    Ok("此功能仅支持 Windows 系统".to_string())
+}
+
 /// 检查 USB 支持是否可用
 /// - 只要 libusb 能正常初始化，就返回 true
 /// - 如果发现有设备但无法访问，会提供更详细的信息

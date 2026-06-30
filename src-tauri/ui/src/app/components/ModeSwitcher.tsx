@@ -40,9 +40,9 @@ export function ModeSwitcher({ value, onChange, disabled = false }: ModeSwitcher
         style={{
           position: "relative",
           display: "flex",
-          height: 44,
-          padding: 3,
-          borderRadius: 11,
+          height: 42,
+          padding: 2,
+          borderRadius: 10,
           background: "#dde8f4",
           opacity: disabled ? 0.55 : 1,
           transition: "opacity 0.2s",
@@ -50,12 +50,12 @@ export function ModeSwitcher({ value, onChange, disabled = false }: ModeSwitcher
       >
         {/* 滑动高亮块 */}
         <motion.div
-          animate={{ left: `calc(${activeIdx} * (100% - 6px) / 3 + 3px)` }}
+          animate={{ left: `calc(${activeIdx} * (100% - 4px) / 3 + 2px)` }}
           transition={{ type: "spring", stiffness: 420, damping: 34 }}
           style={{
             position: "absolute",
-            top: 3,
-            width: "calc((100% - 6px) / 3)",
+            top: 2,
+            width: "calc((100% - 4px) / 3)",
             height: 38,
             borderRadius: 8,
             background: "#fff",

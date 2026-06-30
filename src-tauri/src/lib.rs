@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, Mutex};
 mod ble;
 mod codec;
 mod config;
+mod debug_usb;
 mod gamepad;
 mod input;
 mod platform;
@@ -362,6 +363,30 @@ fn diagnose_usb() -> String {
     usb::diagnose_usb()
 }
 
+/// 尝试为检测到的 Android/AOA 设备安装 WinUSB 驱动（Windows only）
+#[tauri::command]
+fn install_usb_driver() -> Result<String, String> {
+    usb::install_usb_driver()
+}
+
+/// USB 调试：创建详细的 USB 通信日志
+#[tauri::command]
+fn debug_usb(session_name: String) -> Result<String, String> {
+    debug_usb::debug_usb(session_name)
+}
+
+/// 检查 WinUSB 驱动状态
+#[tauri::command]
+fn check_winusb_driver() -> String {
+    debug_usb::check_winusb_driver()
+}
+
+/// 重置指定的 USB 设备
+#[tauri::command]
+fn reset_usb_device(vid_hex: String, pid_hex: String) -> Result<String, String> {
+    debug_usb::reset_usb_device(vid_hex, pid_hex)
+}
+
 /// Get whether autostart on boot is enabled
 #[tauri::command]
 fn get_autostart(app: tauri::AppHandle) -> bool {
@@ -517,6 +542,10 @@ pub fn run() {
             check_vigem_installed,
             check_usb_driver,
             diagnose_usb,
+            install_usb_driver,
+            debug_usb,
+            check_winusb_driver,
+            reset_usb_device,
             get_autostart,
             set_autostart,
             get_minimize_to_tray,

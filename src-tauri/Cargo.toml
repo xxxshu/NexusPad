@@ -1,6 +1,6 @@
 [package]
 name = "nexuspad"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2021"
 
 [lib]
@@ -27,6 +27,7 @@ enigo = { version = "0.6", features = ["serde"] }
 arboard = "3"
 rand = "0.9"
 rusb = "0.9"
+dirs = "5.0"
 
 [target.'cfg(windows)'.dependencies]
 vigem-client = "0.1"
