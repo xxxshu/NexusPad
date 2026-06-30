@@ -355,7 +355,7 @@ function GeneralTab() {
               如果 USB 连接失败，请先尝试在手机上切换一下 USB 模式（如「仅充电」、「文件传输」等），然后重试连接。
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               onClick={() => invoke("check_usb_driver").then((ok: any) => setUsbDriverOk(!!ok)).catch(() => setUsbDriverOk(false))}
               style={{
@@ -376,7 +376,45 @@ function GeneralTab() {
                 fontFamily: "system-ui, sans-serif",
               }}
             >
-              运行诊断
+              基本诊断
+            </button>
+            <button
+              onClick={() => invoke("check_winusb_driver").then((r: any) => setUsbDiag(String(r))).catch((e) => setUsbDiag("诊断失败: " + e))}
+              style={{
+                background: "#fff", border: "1px solid rgba(0,98,171,0.2)",
+                borderRadius: 7, color: "#0062AB", fontSize: 12,
+                padding: "6px 12px", cursor: "pointer",
+                fontFamily: "system-ui, sans-serif",
+              }}
+            >
+              驱动检测
+            </button>
+            <button
+              onClick={() => invoke("debug_usb", { sessionName: "usb_connection_test" }).then((msg: any) => {
+                setUsbDiag(String(msg));
+              }).catch((e) => setUsbDiag("调试失败: " + e))}
+              style={{
+                background: "#673ab7", border: "none",
+                borderRadius: 7, color: "#fff", fontSize: 12,
+                padding: "6px 12px", cursor: "pointer",
+                fontFamily: "system-ui, sans-serif", fontWeight: 600,
+              }}
+            >
+              详细调试
+            </button>
+            <button
+              onClick={() => invoke("install_usb_driver").then((msg: any) => {
+                alert(msg);
+                invoke("diagnose_usb").then((r: any) => setUsbDiag(String(r)));
+              }).catch((e) => alert("驱动安装指导获取失败: " + e))}
+              style={{
+                background: "#ff9800", border: "none",
+                borderRadius: 7, color: "#fff", fontSize: 12,
+                padding: "6px 12px", cursor: "pointer",
+                fontFamily: "system-ui, sans-serif", fontWeight: 600,
+              }}
+            >
+              驱动修复指导
             </button>
           </div>
           {usbDiag && (
