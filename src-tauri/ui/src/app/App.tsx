@@ -368,7 +368,7 @@ export default function App() {
         }}
       >
         <span style={{ color: "#c5dff0", fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-          NexusPad v0.9.2
+          NexusPad v0.9.5
         </span>
       </div>
     </div>
